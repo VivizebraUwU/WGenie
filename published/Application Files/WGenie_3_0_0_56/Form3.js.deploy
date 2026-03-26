@@ -1,0 +1,2423 @@
+document.addEventListener("DOMContentLoaded", function () {
+    var tabDragLogPrefix = "[TAB-DRAG][JS]";
+    var browserLogPrefix = "[FORM3-BROWSER][JS]";
+    var storageKey = "form3-theme";
+    var root = document.documentElement;
+    var buttonSelector = ".theme-toggle, .tool-button";
+    var themeToggle = document.getElementById("themeToggle");
+    var toolList = document.getElementById("toolList");
+    var tabsBar = document.querySelector(".tabs-bar");
+    var messageText = document.querySelector(".message-text");
+    var contentKicker = document.querySelector(".content-kicker");
+    var contentTitle = document.querySelector(".workspace-empty h2");
+    var contentBody = document.querySelector(".workspace-empty p:last-of-type");
+    var workspaceEmpty = document.getElementById("workspaceEmpty");
+    var workspaceHost = document.getElementById("workspaceHost");
+    var resizeObserver = null;
+    var savedTheme = null;
+    var toolDefinitions = new Map();
+    var browserToolDefinition = {
+        id: "browser",
+        label: "Browser",
+        workspaceType: "browser"
+    };
+    var mailoToolConfiguration = {
+        id: "email",
+        label: "EMAIL",
+        workspaceType: "mailo-v2",
+        available: false,
+        url: "",
+        missingFiles: []
+    };
+    var defaultBrowserUrl = "";
+    var pendingBrowserNavigationUrl = null;
+    var currentMailoState = null;
+    var currentCooldownSimulatorState = null;
+    var tabState = {
+        items: [],
+        activeId: null,
+        dragId: null,
+        dragActive: false,
+        sourceIndex: -1,
+        hoverTabId: null,
+        previewIndex: null,
+        dropPreview: null,
+        mouseDownCandidate: null,
+        suppressClickUntil: 0
+    };
+    var emptyMessage = "Select a tool from the toolbox to open it.";
+    var emptyContentTitle = "No tool open";
+    var emptyContentBody = "Select a tool from the toolbox to open a tab and launch the matching Form2 interface.";
+
+    logTabDrag("INIT", {
+        layer: "webview-js",
+        tabsOwner: "WebView2 HTML/JS",
+        forwarding: "console+webMessage",
+        tabsBarFound: !!tabsBar,
+        initialTabCount: document.querySelectorAll(".tab-button").length
+    });
+
+    try {
+        savedTheme = window.localStorage.getItem(storageKey);
+    } catch (error) {
+        savedTheme = null;
+    }
+
+    applyTheme(savedTheme === "light" ? "light" : "dark");
+    scheduleButtonFit();
+
+    if (themeToggle) {
+        themeToggle.addEventListener("click", function () {
+            var nextTheme = root.getAttribute("data-theme") === "light" ? "dark" : "light";
+            applyTheme(nextTheme);
+
+            try {
+                window.localStorage.setItem(storageKey, nextTheme);
+            } catch (error) {
+            }
+        });
+    }
+
+    if (toolList) {
+        toolList.addEventListener("click", function (event) {
+            var button = event.target.closest(".tool-button");
+            if (!button) {
+                return;
+            }
+
+            if (button.dataset.toolId === browserToolDefinition.id) {
+                logBrowserWorkspace("TOOLBOX_CLICK", {
+                    toolId: button.dataset.toolId,
+                    label: button.textContent
+                });
+            }
+
+            openOrActivateTool(button.dataset.toolId);
+            scheduleButtonFit();
+        });
+    }
+
+    if (tabsBar) {
+        logTabDrag("HANDLERS_ATTACH", {
+            target: ".tabs-bar",
+            existingTabs: tabsBar.querySelectorAll(".tab-button").length
+        });
+
+        tabsBar.addEventListener("pointerdown", function (event) {
+            logPointerInput("POINTER_DOWN", event);
+        });
+
+        tabsBar.addEventListener("mousedown", function (event) {
+            logPointerInput("MOUSE_DOWN_TOP", event);
+        });
+
+        tabsBar.addEventListener("click", function (event) {
+            if (Date.now() < tabState.suppressClickUntil) {
+                event.preventDefault();
+                event.stopPropagation();
+                logTabDrag("CLICK_SUPPRESSED", {
+                    reason: "drag-release",
+                    targetRole: getEventTargetRole(event.target)
+                });
+                return;
+            }
+
+            var closeButton = event.target.closest(".tab-close");
+            if (closeButton) {
+                event.stopPropagation();
+                logTabDrag("CLOSE_CLICK", {
+                    tab: formatTabIdentity(closeButton.dataset.tabId),
+                    targetRole: getEventTargetRole(event.target)
+                });
+                closeTab(closeButton.dataset.tabId);
+                return;
+            }
+
+            var tab = event.target.closest(".tab-button");
+            if (!tab) {
+                return;
+            }
+
+            activateTab(tab.dataset.tabId, true);
+        });
+
+        tabsBar.addEventListener("auxclick", function (event) {
+            if (event.button !== 1) {
+                return;
+            }
+
+            var tab = event.target.closest(".tab-button");
+            if (!tab) {
+                return;
+            }
+
+            event.preventDefault();
+            logTabDrag("CLOSE_MIDDLE_CLICK", {
+                tab: formatTabIdentity(tab.dataset.tabId),
+                targetRole: getEventTargetRole(event.target)
+            });
+            closeTab(tab.dataset.tabId);
+        });
+
+        tabsBar.addEventListener("mousedown", function (event) {
+            var tab = event.target.closest(".tab-button");
+            var isCloseButton = !!event.target.closest(".tab-close");
+
+            if (event.button !== 0) {
+                return;
+            }
+
+            if (!tab) {
+                logTabDrag("MOUSEDOWN_SKIPPED", {
+                    reason: "no-tab-under-pointer",
+                    targetRole: getEventTargetRole(event.target),
+                    x: event.clientX,
+                    y: event.clientY
+                });
+                return;
+            }
+
+            if (isCloseButton) {
+                logTabDrag("MOUSEDOWN_INTERCEPTED", {
+                    reason: "close-button-hit",
+                    tab: formatTabIdentity(tab.dataset.tabId)
+                });
+                return;
+            }
+
+            tabState.mouseDownCandidate = {
+                tabId: tab.dataset.tabId,
+                x: event.clientX,
+                y: event.clientY,
+                sourceIndex: getModelIndexById(tab.dataset.tabId)
+            };
+
+            logTabDrag("MOUSEDOWN", {
+                tab: formatTabIdentity(tab.dataset.tabId),
+                visualIndex: getVisualIndexById(tab.dataset.tabId),
+                modelIndex: getModelIndexById(tab.dataset.tabId),
+                x: event.clientX,
+                y: event.clientY,
+                dragAllowed: true,
+                targetRole: getEventTargetRole(event.target)
+            });
+            event.preventDefault();
+        });
+
+        tabsBar.addEventListener("keydown", function (event) {
+            var closeButton = event.target.closest(".tab-close");
+            if (closeButton && (event.key === "Enter" || event.key === " ")) {
+                event.preventDefault();
+                closeTab(closeButton.dataset.tabId);
+                return;
+            }
+
+            var tab = event.target.closest(".tab-button");
+            if (!tab) {
+                return;
+            }
+
+            if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                activateTab(tab.dataset.tabId, true);
+            }
+        });
+
+        tabsBar.addEventListener("wheel", function (event) {
+            var delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+
+            if (delta === 0) {
+                return;
+            }
+
+            tabsBar.scrollLeft += delta;
+            event.preventDefault();
+        }, { passive: false });
+
+        tabsBar.addEventListener("dragstart", function (event) {
+            event.preventDefault();
+            logTabDrag("NATIVE_DRAGSTART_IGNORED", {
+                targetRole: getEventTargetRole(event.target)
+            });
+        });
+
+        tabsBar.addEventListener("mouseleave", function (event) {
+            if (!tabState.dragActive) {
+                return;
+            }
+
+            logTabDrag("DRAG_LEAVE", {
+                source: formatTabIdentity(tabState.dragId),
+                reason: "left-tab-strip",
+                x: event.clientX,
+                y: event.clientY
+            });
+        });
+    } else {
+        logTabDrag("HANDLERS_ATTACH_SKIPPED", {
+            reason: "tabsBar-selector-not-found",
+            selector: ".tabs-bar"
+        });
+    }
+
+    document.addEventListener("pointermove", function (event) {
+        if (!tabState.mouseDownCandidate && !tabState.dragId) {
+            return;
+        }
+
+        logPointerInput("POINTER_MOVE_DOC", event);
+    });
+
+    document.addEventListener("mousemove", function (event) {
+        if (!tabState.mouseDownCandidate && !tabState.dragId) {
+            return;
+        }
+
+        logPointerInput("MOUSE_MOVE_DOC", event);
+        handleDocumentMouseMove(event);
+    });
+
+    document.addEventListener("pointerup", function (event) {
+        if (!tabState.mouseDownCandidate && !tabState.dragId) {
+            return;
+        }
+
+        logPointerInput("POINTER_UP_DOC", event);
+    });
+
+    document.addEventListener("mouseup", function (event) {
+        if (!tabState.mouseDownCandidate && !tabState.dragId) {
+            return;
+        }
+
+        logPointerInput("MOUSE_UP_DOC", event);
+        handleDocumentMouseUp(event);
+    });
+
+    window.addEventListener("message", function (event) {
+        if (!event || !event.data) {
+            return;
+        }
+
+        if (event.data.type === "mailo-preview-trace") {
+            logBrowserWorkspace("MAILO_PREVIEW_TRACE", {
+                message: event.data.message || ""
+            });
+            return;
+        }
+
+        if (event.data.type === "mailo-action") {
+            logBrowserWorkspace("MAILO_ACTION_MESSAGE", {
+                action: event.data.action || ""
+            });
+            postMailoAction(event.data.action);
+            return;
+        }
+
+        if (event.data.type === "mailo-ready") {
+            syncEmbeddedWorkspaceThemes(root.getAttribute("data-theme") || "dark");
+            postMailoStateToFrames();
+            return;
+        }
+    });
+
+    window.addEventListener("resize", function () {
+        scheduleButtonFit();
+        scheduleBrowserWorkspaceSync("window-resize");
+    });
+
+    if (window.ResizeObserver) {
+        resizeObserver = new ResizeObserver(function () {
+            scheduleButtonFit();
+            scheduleBrowserWorkspaceSync("resize-observer");
+        });
+
+        resizeObserver.observe(document.body);
+    }
+
+    function applyTheme(themeName) {
+        root.setAttribute("data-theme", themeName);
+        pushBrowserThemeState("apply-theme");
+        syncEmbeddedWorkspaceThemes(themeName);
+
+        if (!themeToggle) {
+            scheduleButtonFit();
+            return;
+        }
+
+        var isDarkTheme = themeName === "dark";
+        themeToggle.textContent = isDarkTheme ? "Light theme" : "Dark theme";
+        themeToggle.setAttribute("aria-pressed", isDarkTheme ? "false" : "true");
+        scheduleButtonFit();
+    }
+
+    function syncActiveToolButton(activeToolId) {
+        var toolButtons = document.querySelectorAll(".tool-button");
+
+        toolButtons.forEach(function (item) {
+            item.classList.remove("is-active");
+        });
+
+        if (!activeToolId) {
+            return;
+        }
+
+        var activeButton = toolList ? toolList.querySelector(".tool-button[data-tool-id='" + activeToolId + "']") : null;
+        if (activeButton) {
+            activeButton.classList.add("is-active");
+        }
+    }
+
+    function openOrActivateTool(toolId) {
+        if (!toolDefinitions.has(toolId)) {
+            return;
+        }
+
+        var existingTab = findTabByToolId(toolId);
+        if (existingTab) {
+            if (toolId === browserToolDefinition.id) {
+                logBrowserWorkspace("TAB_REUSE", {
+                    tab: formatTabIdentity(existingTab.id)
+                });
+            }
+
+            activateTab(existingTab.id, true);
+            return;
+        }
+
+        var tool = toolDefinitions.get(toolId);
+        var tab = {
+            id: "tab-" + toolId,
+            toolId: toolId,
+            title: tool.label,
+            workspaceType: tool.workspaceType || "native",
+            panelId: "panel-" + toolId
+        };
+
+        tabState.items.push(tab);
+        tabState.activeId = tab.id;
+        if (tab.workspaceType === "browser") {
+            logBrowserWorkspace("TAB_CREATE", {
+                tab: formatTabIdentity(tab.id),
+                url: defaultBrowserUrl
+            });
+        }
+
+        createWorkspacePanel(tab);
+        renderTabs();
+        updateWorkspaceVisibility();
+        syncActiveToolButton(toolId);
+        activateWorkspace(tab);
+        if (shouldNotifyHost(tab)) {
+            notifyHostAboutTool(toolId);
+        }
+    }
+
+    function activateTab(tabId, notifyHost) {
+        var tab = findTabById(tabId);
+        if (!tab) {
+            return;
+        }
+
+        tabState.activeId = tabId;
+        renderTabs();
+        updateWorkspaceVisibility();
+        activateWorkspace(tab);
+        syncActiveToolButton(tab.toolId);
+
+        if (notifyHost && shouldNotifyHost(tab)) {
+            notifyHostAboutTool(tab.toolId);
+        }
+    }
+
+    function closeTab(tabId) {
+        var tabIndex = tabState.items.findIndex(function (item) {
+            return item.id === tabId;
+        });
+
+        if (tabIndex < 0) {
+            return;
+        }
+
+        disposeWorkspace(tabState.items[tabIndex]);
+        var wasActive = tabState.activeId === tabId;
+        tabState.items.splice(tabIndex, 1);
+
+        if (wasActive) {
+            if (tabState.items.length === 0) {
+                tabState.activeId = null;
+            } else {
+                var nextIndex = Math.min(tabIndex, tabState.items.length - 1);
+                tabState.activeId = tabState.items[nextIndex].id;
+            }
+        }
+
+        renderTabs();
+        updateWorkspaceVisibility();
+        activateWorkspace(getActiveTab());
+        syncActiveToolButton(getActiveTab() ? getActiveTab().toolId : null);
+        scheduleBrowserWorkspaceSync("close-tab");
+    }
+
+    function notifyHostAboutTool(toolId) {
+        if (!toolId || !window.chrome || !window.chrome.webview) {
+            return;
+        }
+
+        window.chrome.webview.postMessage({
+            type: "launchTool",
+            toolId: toolId
+        });
+    }
+
+    function scheduleButtonFit() {
+        window.requestAnimationFrame(function () {
+            fitAllButtons();
+        });
+    }
+
+    function fitAllButtons() {
+        var buttons = document.querySelectorAll(buttonSelector);
+
+        buttons.forEach(function (button) {
+            fitButtonText(button);
+        });
+    }
+
+    function fitButtonText(button) {
+        var computed = window.getComputedStyle(button);
+        var minFontSize = parseFloat(getRootVariableValue("--button-font-size-min")) || 12;
+        var baseFontSize = button.dataset.baseFontSize
+            ? parseFloat(button.dataset.baseFontSize)
+            : parseFloat(computed.fontSize);
+        var fittedFontSize = baseFontSize;
+
+        button.dataset.baseFontSize = String(baseFontSize);
+        button.style.fontSize = baseFontSize + "px";
+        button.style.whiteSpace = "nowrap";
+        button.style.overflowWrap = "normal";
+        button.style.wordBreak = "normal";
+
+        while (isButtonOverflowing(button) && fittedFontSize > minFontSize) {
+            fittedFontSize -= 0.5;
+            button.style.fontSize = fittedFontSize + "px";
+        }
+
+        if (isButtonOverflowing(button)) {
+            button.style.whiteSpace = "normal";
+            button.style.overflowWrap = "anywhere";
+            button.style.wordBreak = "break-word";
+
+            while (isButtonOverflowing(button) && fittedFontSize > minFontSize) {
+                fittedFontSize -= 0.5;
+                button.style.fontSize = fittedFontSize + "px";
+            }
+        }
+    }
+
+    function isButtonOverflowing(button) {
+        return button.scrollWidth > button.clientWidth || button.scrollHeight > button.clientHeight;
+    }
+
+    function getRootVariableValue(variableName) {
+        return window.getComputedStyle(root).getPropertyValue(variableName).trim();
+    }
+
+    window.form3SetTools = function (tools) {
+        renderToolButtons(Array.isArray(tools) ? tools : []);
+    };
+
+    window.form3SetMailoState = function (state) {
+        currentMailoState = state || null;
+        postMailoStateToFrames();
+    };
+
+    window.form3SetCooldownSimulatorState = function (state) {
+        currentCooldownSimulatorState = state || null;
+        updateCooldownSimulatorWorkspacePanels();
+    };
+
+    window.form3Configure = function (configuration) {
+        if (configuration && configuration.browserTool) {
+            browserToolDefinition = {
+                id: configuration.browserTool.id || browserToolDefinition.id,
+                label: configuration.browserTool.label || browserToolDefinition.label,
+                workspaceType: "browser"
+            };
+        }
+
+        if (configuration && configuration.mailoTool) {
+            mailoToolConfiguration = {
+                id: configuration.mailoTool.id || mailoToolConfiguration.id,
+                label: configuration.mailoTool.label || mailoToolConfiguration.label,
+                workspaceType: configuration.mailoTool.workspaceType || mailoToolConfiguration.workspaceType,
+                available: configuration.mailoTool.available !== false,
+                url: configuration.mailoTool.url || "",
+                missingFiles: Array.isArray(configuration.mailoTool.missingFiles)
+                    ? configuration.mailoTool.missingFiles.slice()
+                    : []
+            };
+        }
+
+        if (configuration && configuration.defaultBrowserUrl) {
+            defaultBrowserUrl = configuration.defaultBrowserUrl;
+        }
+
+        logBrowserWorkspace("CONFIGURE", {
+            defaultUrl: defaultBrowserUrl,
+            browserToolId: browserToolDefinition.id
+        });
+
+        renderToolButtons(Array.from(toolDefinitions.values()));
+    };
+
+    window.form3OpenBrowserPreview = function (url) {
+        pendingBrowserNavigationUrl = typeof url === "string" && url.length > 0
+            ? url
+            : null;
+
+        logBrowserWorkspace("HOST_PREVIEW_REQUEST", {
+            url: pendingBrowserNavigationUrl || defaultBrowserUrl
+        });
+
+        openOrActivateTool(browserToolDefinition.id);
+    };
+
+    function renderToolButtons(tools) {
+        if (!toolList) {
+            return;
+        }
+
+        toolDefinitions.clear();
+        toolList.innerHTML = "";
+
+        tools.forEach(function (tool) {
+            var toolId = tool.Id || tool.id;
+            var label = tool.Label || tool.label;
+            var workspaceType = tool.workspaceType || "native";
+            var button = document.createElement("button");
+
+            toolDefinitions.set(toolId, {
+                id: toolId,
+                label: label,
+                workspaceType: workspaceType
+            });
+
+            button.className = "tool-button";
+            button.type = "button";
+            button.dataset.toolId = toolId;
+            button.textContent = label;
+
+            toolList.appendChild(button);
+        });
+
+        appendBrowserToolButton();
+
+        syncTabTitles();
+        syncActiveToolButton(getActiveTab() ? getActiveTab().toolId : null);
+        updateWorkspaceVisibility();
+        activateWorkspace(getActiveTab());
+        renderTabs();
+        scheduleButtonFit();
+    }
+
+    function appendBrowserToolButton() {
+        if (!toolList || !browserToolDefinition) {
+            return;
+        }
+
+        toolDefinitions.set(browserToolDefinition.id, {
+            id: browserToolDefinition.id,
+            label: browserToolDefinition.label,
+            workspaceType: browserToolDefinition.workspaceType
+        });
+
+        var button = document.createElement("button");
+        button.className = "tool-button";
+        button.type = "button";
+        button.dataset.toolId = browserToolDefinition.id;
+        button.textContent = browserToolDefinition.label;
+        toolList.appendChild(button);
+    }
+
+    function renderTabs() {
+        if (!tabsBar) {
+            logTabDrag("RENDER_SKIPPED", {
+                reason: "tabsBar-selector-not-found"
+            });
+            return;
+        }
+
+        tabsBar.innerHTML = "";
+        tabsBar.setAttribute("role", "tablist");
+        logTabDrag("RENDER", {
+            tabCount: tabState.items.length,
+            order: formatTabOrder()
+        });
+
+        if (tabState.items.length === 0) {
+            var emptyState = document.createElement("div");
+            emptyState.className = "tabs-empty";
+            emptyState.textContent = "No open tabs";
+            tabsBar.appendChild(emptyState);
+            logTabDrag("RENDER_EMPTY", {
+                reason: "zero-tabs"
+            });
+            return;
+        }
+
+        tabState.items.forEach(function (tab) {
+            var tabElement = document.createElement("div");
+            var tabLabel = document.createElement("span");
+            var closeButton = document.createElement("button");
+            var isActive = tab.id === tabState.activeId;
+
+            tabElement.className = "tab-button" + (isActive ? " is-active" : "");
+            tabElement.dataset.tabId = tab.id;
+            tabElement.setAttribute("role", "tab");
+            tabElement.setAttribute("aria-selected", isActive ? "true" : "false");
+            tabElement.tabIndex = isActive ? 0 : -1;
+
+            tabLabel.className = "tab-label";
+            tabLabel.textContent = tab.title;
+
+            closeButton.className = "tab-close";
+            closeButton.type = "button";
+            closeButton.dataset.tabId = tab.id;
+            closeButton.draggable = false;
+            closeButton.setAttribute("aria-label", "Close " + tab.title);
+            closeButton.textContent = "\u00D7";
+
+            tabElement.appendChild(tabLabel);
+            tabElement.appendChild(closeButton);
+            tabsBar.appendChild(tabElement);
+        });
+    }
+
+    function handleDocumentMouseMove(event) {
+        if (!tabState.mouseDownCandidate && !tabState.dragActive) {
+            return;
+        }
+
+        if (!tabState.dragActive && tabState.mouseDownCandidate) {
+            if (!hasPrimaryButtonPressed(event)) {
+                logTabDrag("DRAG_CANCEL", {
+                    reason: "primary-button-released-before-threshold",
+                    tab: formatTabIdentity(tabState.mouseDownCandidate.tabId),
+                    x: event.clientX,
+                    y: event.clientY
+                });
+                tabState.mouseDownCandidate = null;
+                return;
+            }
+
+            if (!hasExceededDragThreshold(event)) {
+                return;
+            }
+
+            beginTabDrag(event);
+        }
+
+        if (!tabState.dragActive) {
+            return;
+        }
+
+        event.preventDefault();
+        updateDropPreview(event.clientX, event.clientY);
+        logHoverState(event);
+    }
+
+    function handleDocumentMouseUp(event) {
+        if (tabState.dragActive) {
+            logTabDrag("DROP", {
+                source: formatTabIdentity(tabState.dragId),
+                fromIndex: tabState.sourceIndex,
+                hover: formatHoverIdentity(tabState.dropPreview),
+                finalIndex: tabState.previewIndex !== null ? tabState.previewIndex : "n/a",
+                valid: tabState.previewIndex !== null,
+                insideStrip: isPointInsideExpandedTabsBar(event.clientX, event.clientY),
+                x: event.clientX,
+                y: event.clientY,
+                targetRole: getEventTargetRole(event.target)
+            });
+
+            commitTabReorder();
+            tabState.suppressClickUntil = Date.now() + 200;
+            logTabDrag("DRAG_END", {
+                source: formatTabIdentity(tabState.dragId),
+                preview: formatHoverIdentity(tabState.dropPreview),
+                order: formatTabOrder()
+            });
+            clearDragState();
+            return;
+        }
+
+        if (tabState.mouseDownCandidate) {
+            logTabDrag("DRAG_CANCEL", {
+                reason: "drag-threshold-not-reached",
+                tab: formatTabIdentity(tabState.mouseDownCandidate.tabId),
+                x: event.clientX,
+                y: event.clientY,
+                targetRole: getEventTargetRole(event.target)
+            });
+            tabState.mouseDownCandidate = null;
+        }
+    }
+
+    function beginTabDrag(event) {
+        var candidate = tabState.mouseDownCandidate;
+        var tabElement = candidate ? findTabElement(candidate.tabId) : null;
+
+        if (!candidate || !tabElement) {
+            logTabDrag("DRAG_START_BLOCKED", {
+                reason: !candidate ? "missing-candidate" : "tab-element-not-found",
+                targetRole: getEventTargetRole(event.target)
+            });
+            tabState.mouseDownCandidate = null;
+            return;
+        }
+
+        tabState.dragId = candidate.tabId;
+        tabState.dragActive = true;
+        tabState.sourceIndex = candidate.sourceIndex;
+        tabState.hoverTabId = candidate.tabId;
+        tabState.previewIndex = candidate.sourceIndex;
+        tabState.dropPreview = {
+            targetId: candidate.tabId,
+            hoverTabId: candidate.tabId,
+            position: "self",
+            insertIndex: candidate.sourceIndex
+        };
+        tabState.mouseDownCandidate = null;
+        tabElement.classList.add("is-dragging");
+        setDragVisualState(true);
+
+        logTabDrag("DRAG_START", {
+            tab: formatTabIdentity(tabState.dragId),
+            sourceIndex: tabState.sourceIndex,
+            visualIndex: getVisualIndexById(tabState.dragId),
+            scrollLeft: tabsBar ? tabsBar.scrollLeft : 0,
+            containerWidth: tabsBar ? tabsBar.clientWidth : 0,
+            bounds: formatRect(tabElement.getBoundingClientRect()),
+            x: event.clientX,
+            y: event.clientY,
+            targetRole: getEventTargetRole(event.target)
+        });
+
+        updateDropPreview(event.clientX, event.clientY);
+        logHoverState(event);
+    }
+
+    function updateDropPreview(clientX, clientY) {
+        var preview = getDropPreview(clientX, clientY);
+
+        tabState.dropPreview = preview;
+        tabState.previewIndex = preview ? preview.insertIndex : null;
+        tabState.hoverTabId = preview ? preview.hoverTabId : null;
+        clearDropIndicators();
+
+        if (!preview || !preview.targetId || preview.targetId === tabState.dragId) {
+            return;
+        }
+
+        var targetTab = findTabElement(preview.targetId);
+        if (!targetTab) {
+            return;
+        }
+
+        targetTab.classList.add(preview.position === "before" ? "drop-before" : "drop-after");
+    }
+
+    function hasExceededDragThreshold(event) {
+        if (!tabState.mouseDownCandidate) {
+            return false;
+        }
+
+        var deltaX = Math.abs(event.clientX - tabState.mouseDownCandidate.x);
+        var deltaY = Math.abs(event.clientY - tabState.mouseDownCandidate.y);
+        return deltaX >= 6 || deltaY >= 6;
+    }
+
+    function hasPrimaryButtonPressed(event) {
+        if (typeof event.buttons === "number") {
+            return (event.buttons & 1) === 1;
+        }
+
+        return true;
+    }
+
+    function commitTabReorder() {
+        if (!tabState.dragId || tabState.previewIndex === null || tabState.previewIndex === undefined) {
+            logTabDrag("REORDER_SKIPPED", {
+                reason: !tabState.dragId ? "missing-drag-id" : "missing-preview-index",
+                source: formatTabIdentity(tabState.dragId),
+                preview: formatHoverIdentity(tabState.dropPreview)
+            });
+            return false;
+        }
+
+        var draggedTabId = tabState.dragId;
+        var draggedTab = findTabById(draggedTabId);
+        if (!draggedTab) {
+            logTabDrag("REORDER_SKIPPED", {
+                reason: "dragged-tab-not-found",
+                source: formatTabIdentity(draggedTabId)
+            });
+            return false;
+        }
+
+        var activeTabBefore = getActiveTab();
+        var modelBefore = formatTabOrder();
+        var sourceIndex = tabState.sourceIndex >= 0 ? tabState.sourceIndex : getModelIndexById(draggedTabId);
+        var reorderedItems = tabState.items.filter(function (item) {
+            return item.id !== draggedTabId;
+        });
+        var insertIndex = tabState.previewIndex;
+
+        if (insertIndex < 0) {
+            insertIndex = 0;
+        }
+
+        if (insertIndex > reorderedItems.length) {
+            insertIndex = reorderedItems.length;
+        }
+
+        logTabDrag("MODEL_BEFORE", {
+            order: modelBefore
+        });
+
+        reorderedItems.splice(insertIndex, 0, draggedTab);
+        var changed = !isSameOrder(tabState.items, reorderedItems);
+
+        if (!changed) {
+            logTabDrag("REORDER_SKIPPED", {
+                reason: "same-position-drop",
+                source: formatTabIdentity(draggedTabId),
+                sourceIndex: sourceIndex,
+                finalIndex: insertIndex,
+                preview: formatHoverIdentity(tabState.dropPreview)
+            });
+        }
+
+        tabState.items = reorderedItems;
+        logTabDrag("MODEL_AFTER", {
+            order: formatTabOrderFromItems(tabState.items),
+            changed: changed,
+            finalIndex: insertIndex
+        });
+        renderTabs();
+        updateWorkspaceVisibility();
+        activateWorkspace(getActiveTab());
+        logTabDrag("ACTIVE_MAPPING", {
+            mappingMode: "stable-id",
+            activeBefore: activeTabBefore ? formatTabIdentity(activeTabBefore.id) : "none",
+            activeAfter: getActiveTab() ? formatTabIdentity(getActiveTab().id) : "none",
+            contentBefore: activeTabBefore ? activeTabBefore.panelId : "none",
+            contentAfter: getActiveTab() ? getActiveTab().panelId : "none",
+            rerendered: true
+        });
+        scheduleButtonFit();
+        return changed;
+    }
+
+    function getDropPreview(clientX, clientY) {
+        if (!tabsBar) {
+            return null;
+        }
+
+        if (!isPointInsideExpandedTabsBar(clientX, clientY)) {
+            return null;
+        }
+
+        var candidateTabs = Array.from(tabsBar.querySelectorAll(".tab-button")).filter(function (tab) {
+            return tab.dataset.tabId !== tabState.dragId;
+        });
+
+        if (candidateTabs.length === 0) {
+            return {
+                targetId: null,
+                hoverTabId: null,
+                position: "after",
+                insertIndex: 0
+            };
+        }
+
+        for (var i = 0; i < candidateTabs.length; i += 1) {
+            var tab = candidateTabs[i];
+            var bounds = tab.getBoundingClientRect();
+            var midpoint = bounds.left + (bounds.width / 2);
+
+            if (clientX < midpoint) {
+                return {
+                    targetId: tab.dataset.tabId,
+                    hoverTabId: tab.dataset.tabId,
+                    position: "before",
+                    insertIndex: i
+                };
+            }
+        }
+
+        return {
+            targetId: candidateTabs[candidateTabs.length - 1].dataset.tabId,
+            hoverTabId: candidateTabs[candidateTabs.length - 1].dataset.tabId,
+            position: "after",
+            insertIndex: candidateTabs.length
+        };
+    }
+
+    function clearDropIndicators() {
+        if (!tabsBar) {
+            return;
+        }
+
+        tabsBar.querySelectorAll(".tab-button").forEach(function (tab) {
+            tab.classList.remove("drop-before", "drop-after");
+        });
+    }
+
+    function clearDragState() {
+        if (tabState.mouseDownCandidate && !tabState.dragActive) {
+            logTabDrag("DRAG_CANCEL", {
+                reason: "state-cleared-before-dragstart",
+                tab: formatTabIdentity(tabState.mouseDownCandidate.tabId)
+            });
+        }
+
+        tabState.dragId = null;
+        tabState.dragActive = false;
+        tabState.sourceIndex = -1;
+        tabState.hoverTabId = null;
+        tabState.previewIndex = null;
+        tabState.dropPreview = null;
+        tabState.mouseDownCandidate = null;
+        clearDropIndicators();
+        setDragVisualState(false);
+
+        if (!tabsBar) {
+            return;
+        }
+
+        tabsBar.querySelectorAll(".tab-button").forEach(function (tab) {
+            tab.classList.remove("is-dragging");
+        });
+    }
+
+    function findTabByToolId(toolId) {
+        return tabState.items.find(function (item) {
+            return item.toolId === toolId;
+        }) || null;
+    }
+
+    function findTabById(tabId) {
+        return tabState.items.find(function (item) {
+            return item.id === tabId;
+        }) || null;
+    }
+
+    function findTabElement(tabId) {
+        return tabsBar ? tabsBar.querySelector(".tab-button[data-tab-id='" + tabId + "']") : null;
+    }
+
+    function getActiveTab() {
+        return findTabById(tabState.activeId);
+    }
+
+    function syncTabTitles() {
+        tabState.items.forEach(function (tab) {
+            if (toolDefinitions.has(tab.toolId)) {
+                tab.title = toolDefinitions.get(tab.toolId).label;
+            }
+        });
+    }
+
+    function updateWorkspaceVisibility() {
+        var hasActiveTab = !!getActiveTab();
+
+        if (workspaceEmpty) {
+            workspaceEmpty.style.display = hasActiveTab ? "none" : "flex";
+        }
+
+        if (workspaceHost) {
+            workspaceHost.classList.toggle("has-workspace", hasActiveTab);
+        }
+
+        if (!hasActiveTab) {
+            if (messageText) {
+                messageText.textContent = emptyMessage;
+            }
+
+            if (contentKicker) {
+                contentKicker.textContent = "Active Tab";
+            }
+
+            if (contentTitle) {
+                contentTitle.textContent = emptyContentTitle;
+            }
+
+            if (contentBody) {
+                contentBody.textContent = emptyContentBody;
+            }
+        }
+
+        scheduleBrowserWorkspaceSync("update-workspace-visibility");
+    }
+
+    function createWorkspacePanel(tab) {
+        if (!workspaceHost || findWorkspacePanel(tab.panelId)) {
+            return;
+        }
+
+        var panel = document.createElement("section");
+        panel.className = "workspace-panel";
+        panel.dataset.tabId = tab.id;
+        panel.id = tab.panelId;
+
+        if (tab.workspaceType === "browser") {
+            var placeholder = document.createElement("div");
+            var placeholderTitle = document.createElement("h3");
+            var placeholderText = document.createElement("p");
+
+            placeholder.className = "browser-workspace-placeholder";
+            placeholderTitle.textContent = "Browser Workspace";
+            placeholderText.textContent = "The native WebView2 browser is attached here and loads " + defaultBrowserUrl + ".";
+
+            panel.classList.add("browser-workspace");
+            placeholder.appendChild(placeholderTitle);
+            placeholder.appendChild(placeholderText);
+            panel.appendChild(placeholder);
+            logBrowserWorkspace("VIEW_CREATE", {
+                tab: formatTabIdentity(tab.id),
+                panelId: tab.panelId
+            });
+        } else if (tab.workspaceType === "mailo-v2") {
+            createMailoWorkspacePanel(panel, tab);
+        } else if (tab.workspaceType === "cooldown-simulator") {
+            createCooldownSimulatorWorkspacePanel(panel, tab);
+        } else {
+            var body = document.createElement("div");
+            var heading = document.createElement("h3");
+            var text = document.createElement("p");
+
+            body.className = "workspace-native-body";
+            heading.textContent = tab.title + " Workspace";
+            text.textContent = "This tab is linked to the matching Form2 interface. Selecting the tab will activate the tool while keeping the tab order independent from workspace content ordering.";
+
+            body.appendChild(heading);
+            body.appendChild(text);
+            panel.classList.add("workspace-native");
+            panel.appendChild(body);
+        }
+
+        workspaceHost.appendChild(panel);
+        scheduleBrowserWorkspaceSync("create-workspace-panel");
+    }
+
+    function activateWorkspace(tab) {
+        if (!workspaceHost) {
+            return;
+        }
+
+        var panels = workspaceHost.querySelectorAll(".workspace-panel");
+
+        panels.forEach(function (panel) {
+            panel.classList.remove("is-active");
+        });
+
+        if (!tab) {
+            return;
+        }
+
+        var panel = findWorkspacePanel(tab.panelId);
+        if (!panel) {
+            createWorkspacePanel(tab);
+            panel = findWorkspacePanel(tab.panelId);
+        }
+
+        if (panel) {
+            panel.classList.add("is-active");
+            if (tab.workspaceType === "mailo-v2") {
+                syncEmbeddedWorkspaceThemes(root.getAttribute("data-theme") || "dark");
+            } else if (tab.workspaceType === "cooldown-simulator") {
+                updateCooldownSimulatorWorkspacePanel(panel);
+            }
+        }
+
+        logBrowserWorkspace("ACTIVATE", {
+            tab: tab ? formatTabIdentity(tab.id) : "none",
+            workspaceType: tab ? tab.workspaceType : "none",
+            panelId: tab ? tab.panelId : "none"
+        });
+        scheduleBrowserWorkspaceSync("activate-workspace");
+
+        if (messageText) {
+            if (tab.workspaceType === "browser") {
+                messageText.textContent = tab.title + " is active. Reorder or close the tab without breaking its browser workspace.";
+            } else if (tab.workspaceType === "mailo-v2") {
+                messageText.textContent = tab.title + " is active in the Form3 HTML workspace. The native Mailo tool in Form2 remains unchanged.";
+            } else if (tab.workspaceType === "cooldown-simulator") {
+                messageText.textContent = tab.title + " is active in the Form3 HTML workspace. CSV selection currently round-trips through the native host.";
+            } else {
+                messageText.textContent = tab.title + " is active. Drag tabs to reorder them or use the close button to dismiss one.";
+            }
+        }
+    }
+
+    function disposeWorkspace(tab) {
+        if (!tab) {
+            return;
+        }
+
+        if (tab.workspaceType === "browser") {
+            logBrowserWorkspace("VIEW_CLOSE", {
+                tab: formatTabIdentity(tab.id),
+                panelId: tab.panelId
+            });
+            postBrowserWorkspaceState("close", tab, null, "dispose-workspace");
+        } else if (tab.workspaceType === "mailo-v2") {
+            postMailoWorkspaceState("close", tab, null, "dispose-workspace");
+        }
+
+        var panel = findWorkspacePanel(tab.panelId);
+        if (!panel) {
+            return;
+        }
+
+        panel.remove();
+    }
+
+    function findWorkspacePanel(panelId) {
+        return workspaceHost ? workspaceHost.querySelector("#" + panelId) : null;
+    }
+
+    function createMailoWorkspacePanel(panel, tab) {
+        var config = getMailoWorkspaceConfiguration(tab.toolId);
+
+        panel.classList.add("workspace-html", "workspace-mailo");
+
+        if (!config || !config.available || !config.url) {
+            panel.appendChild(createHtmlWorkspaceError(tab, config));
+            return;
+        }
+
+        var frame = document.createElement("iframe");
+        frame.className = "workspace-html-frame";
+        frame.dataset.toolId = tab.toolId;
+        frame.dataset.workspaceType = tab.workspaceType;
+        frame.setAttribute("title", tab.title + " workspace");
+        frame.setAttribute("loading", "eager");
+        frame.src = config.url;
+        frame.addEventListener("load", function () {
+            syncEmbeddedWorkspaceFrameTheme(frame, root.getAttribute("data-theme") || "dark");
+            postMailoStateToFrames();
+        });
+        panel.appendChild(frame);
+    }
+
+    function createCooldownSimulatorWorkspacePanel(panel, tab) {
+        var body = document.createElement("div");
+        var heading = document.createElement("h3");
+        var text = document.createElement("p");
+        var selectButton = document.createElement("button");
+        var analyzeButton = document.createElement("button");
+        var analyzeSuggestedButton = document.createElement("button");
+        var improveDelaysButton = document.createElement("button");
+        var exportButton = document.createElement("button");
+        var ganttButton = document.createElement("button");
+        var selectionDisplay = document.createElement("div");
+        var errorDisplay = document.createElement("div");
+        var channelsContainer = document.createElement("div");
+        var optimizationSummaryContainer = document.createElement("div");
+        var resultsErrorDisplay = document.createElement("div");
+        var exportStatusDisplay = document.createElement("div");
+        var resultsContainer = document.createElement("div");
+
+        body.className = "workspace-native-body workspace-cooldown-simulator";
+        heading.textContent = tab.title;
+        text.textContent = "Placeholder workspace for the upcoming cooldown simulation flow. Select a CSV file to attach input for the next slice.";
+        selectButton.className = "tool-button";
+        selectButton.type = "button";
+        selectButton.textContent = "Select CSV";
+        selectButton.addEventListener("click", function () {
+            postCooldownSimulatorAction("select-csv");
+        });
+        analyzeButton.className = "tool-button";
+        analyzeButton.type = "button";
+        analyzeButton.textContent = "Analyze provided severities";
+        analyzeButton.style.marginLeft = "8px";
+        analyzeButton.addEventListener("click", function () {
+            postCooldownSimulatorAction("analyze-selected-channels", collectSelectedCooldownSimulatorChannels(panel));
+        });
+        analyzeSuggestedButton.className = "tool-button";
+        analyzeSuggestedButton.type = "button";
+        analyzeSuggestedButton.textContent = "Analyze with suggested severities";
+        analyzeSuggestedButton.style.marginLeft = "8px";
+        analyzeSuggestedButton.addEventListener("click", function () {
+            postCooldownSimulatorAction("analyze-with-suggested-severities", collectSelectedCooldownSimulatorChannels(panel));
+        });
+        improveDelaysButton.className = "tool-button";
+        improveDelaysButton.type = "button";
+        improveDelaysButton.textContent = "Improve delays";
+        improveDelaysButton.style.marginLeft = "8px";
+        improveDelaysButton.style.display = "none";
+        improveDelaysButton.setAttribute("data-role", "cooldown-simulator-improve-delays");
+        improveDelaysButton.addEventListener("click", function () {
+            postCooldownSimulatorAction("improve-delays");
+        });
+        exportButton.className = "tool-button";
+        exportButton.type = "button";
+        exportButton.textContent = "Export simple file";
+        exportButton.style.marginLeft = "8px";
+        exportButton.addEventListener("click", function () {
+            postCooldownSimulatorAction("export-simple-file");
+        });
+        ganttButton.className = "tool-button";
+        ganttButton.type = "button";
+        ganttButton.textContent = "Open Gantt View";
+        ganttButton.style.marginLeft = "8px";
+        ganttButton.addEventListener("click", function () {
+            postCooldownSimulatorAction("open-gantt-view");
+        });
+
+        selectionDisplay.className = "cooldown-simulator-selection";
+        selectionDisplay.setAttribute("data-role", "cooldown-simulator-selection");
+        errorDisplay.className = "cooldown-simulator-error";
+        errorDisplay.setAttribute("data-role", "cooldown-simulator-error");
+        channelsContainer.className = "cooldown-simulator-channels";
+        channelsContainer.setAttribute("data-role", "cooldown-simulator-channels");
+        optimizationSummaryContainer.className = "cooldown-simulator-optimization-summary";
+        optimizationSummaryContainer.setAttribute("data-role", "cooldown-simulator-optimization-summary");
+        resultsErrorDisplay.className = "cooldown-simulator-results-error";
+        resultsErrorDisplay.setAttribute("data-role", "cooldown-simulator-results-error");
+        exportStatusDisplay.className = "cooldown-simulator-export-status";
+        exportStatusDisplay.setAttribute("data-role", "cooldown-simulator-export-status");
+        resultsContainer.className = "cooldown-simulator-results";
+        resultsContainer.setAttribute("data-role", "cooldown-simulator-results");
+        resultsContainer.addEventListener("click", function (event) {
+            handleCooldownSimulatorResultsClick(panel, event);
+        });
+
+        body.appendChild(heading);
+        body.appendChild(text);
+        body.appendChild(selectButton);
+        body.appendChild(analyzeButton);
+        body.appendChild(analyzeSuggestedButton);
+        body.appendChild(improveDelaysButton);
+        body.appendChild(exportButton);
+        body.appendChild(ganttButton);
+        body.appendChild(selectionDisplay);
+        body.appendChild(errorDisplay);
+        body.appendChild(channelsContainer);
+        body.appendChild(optimizationSummaryContainer);
+        body.appendChild(resultsErrorDisplay);
+        body.appendChild(exportStatusDisplay);
+        body.appendChild(resultsContainer);
+        panel.appendChild(body);
+        updateCooldownSimulatorWorkspacePanel(panel);
+    }
+
+    function createHtmlWorkspaceError(tab, config) {
+        var body = document.createElement("div");
+        var heading = document.createElement("h3");
+        var text = document.createElement("p");
+
+        body.className = "workspace-html-error";
+        heading.textContent = tab.title + " workspace could not load";
+        text.textContent = config && Array.isArray(config.missingFiles) && config.missingFiles.length > 0
+            ? "Missing local files: " + config.missingFiles.join(", ") + "."
+            : "The local HTML workspace files are unavailable.";
+
+        body.appendChild(heading);
+        body.appendChild(text);
+        return body;
+    }
+
+    function getMailoWorkspaceConfiguration(toolId) {
+        if (toolId !== mailoToolConfiguration.id) {
+            return null;
+        }
+
+        return mailoToolConfiguration;
+    }
+
+    function shouldNotifyHost(tab) {
+        return !!tab && (tab.workspaceType || "native") === "native";
+    }
+
+    function logHoverState(event) {
+        logTabDrag("HOVER", {
+            source: formatTabIdentity(tabState.dragId),
+            sourceIndex: tabState.sourceIndex,
+            hover: formatHoverIdentity(tabState.dropPreview),
+            previewIndex: tabState.previewIndex,
+            mouseX: event.clientX,
+            mouseY: event.clientY,
+            adjustedX: getAdjustedClientX(event.clientX),
+            scrollLeft: tabsBar ? tabsBar.scrollLeft : 0,
+            targetRole: getEventTargetRole(event.target),
+            coordsAdjustedForScroll: true
+        });
+    }
+
+    function formatTabOrder() {
+        return formatTabOrderFromItems(tabState.items);
+    }
+
+    function formatTabOrderFromItems(items) {
+        return "[" + items.map(function (item) {
+            return item.title + ":" + item.id;
+        }).join(", ") + "]";
+    }
+
+    function formatTabIdentity(tabId) {
+        if (!tabId) {
+            return "none";
+        }
+
+        var tab = findTabById(tabId);
+        if (!tab) {
+            return "id=\"" + tabId + "\" title=\"unknown\"";
+        }
+
+        return "id=\"" + tab.id + "\" title=\"" + sanitizeLogValue(tab.title) + "\"";
+    }
+
+    function formatHoverIdentity(preview) {
+        if (!preview) {
+            return "none";
+        }
+
+        var targetId = preview.targetId || "none";
+        var targetIndex = targetId === "none" ? "n/a" : getModelIndexById(targetId);
+        var visualIndex = targetId === "none" ? "n/a" : getVisualIndexById(targetId);
+        return "target=" + formatTabIdentity(targetId) + " hoverIndex=" + visualIndex + " modelIndex=" + targetIndex + " insertionIndex=" + preview.insertIndex + " position=" + preview.position;
+    }
+
+    function getVisualIndexById(tabId) {
+        if (!tabsBar || !tabId) {
+            return -1;
+        }
+
+        var tabs = Array.from(tabsBar.querySelectorAll(".tab-button"));
+        return tabs.findIndex(function (tab) {
+            return tab.dataset.tabId === tabId;
+        });
+    }
+
+    function getModelIndexById(tabId) {
+        return tabState.items.findIndex(function (item) {
+            return item.id === tabId;
+        });
+    }
+
+    function getAdjustedClientX(clientX) {
+        if (!tabsBar) {
+            return clientX;
+        }
+
+        return Math.round(clientX - tabsBar.getBoundingClientRect().left + tabsBar.scrollLeft);
+    }
+
+    function getEventTargetRole(target) {
+        if (!target) {
+            return "unknown";
+        }
+
+        if (target.closest && target.closest(".tab-close")) {
+            return "close-button";
+        }
+
+        if (target.classList && target.classList.contains("tab-label")) {
+            return "tab-label";
+        }
+
+        if (target.closest && target.closest(".tab-button")) {
+            return "tab-body";
+        }
+
+        if (target.closest && target.closest(".tabs-bar")) {
+            return "tab-strip";
+        }
+
+        return target.tagName ? target.tagName.toLowerCase() : "unknown";
+    }
+
+    function isPointInsideTabsBar(clientX, clientY) {
+        if (!tabsBar) {
+            return false;
+        }
+
+        var rect = tabsBar.getBoundingClientRect();
+        return clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
+    }
+
+    function isPointInsideExpandedTabsBar(clientX, clientY) {
+        if (!tabsBar) {
+            return false;
+        }
+
+        var rect = tabsBar.getBoundingClientRect();
+        var verticalPadding = 28;
+        var horizontalPadding = 16;
+
+        return clientX >= rect.left - horizontalPadding &&
+            clientX <= rect.right + horizontalPadding &&
+            clientY >= rect.top - verticalPadding &&
+            clientY <= rect.bottom + verticalPadding;
+    }
+
+    function isSameOrder(currentItems, nextItems) {
+        if (currentItems.length !== nextItems.length) {
+            return false;
+        }
+
+        for (var i = 0; i < currentItems.length; i += 1) {
+            if (currentItems[i].id !== nextItems[i].id) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    function formatRect(rect) {
+        return "left=" + Math.round(rect.left) + ",top=" + Math.round(rect.top) + ",width=" + Math.round(rect.width) + ",height=" + Math.round(rect.height);
+    }
+
+    function setDragVisualState(isActive) {
+        if (tabsBar) {
+            tabsBar.classList.toggle("is-drag-active", isActive);
+        }
+
+        if (document.body) {
+            document.body.classList.toggle("dragging-tabs", isActive);
+        }
+    }
+
+    function scheduleBrowserWorkspaceSync(reason) {
+        window.requestAnimationFrame(function () {
+            syncBrowserWorkspace(reason);
+        });
+    }
+
+    function syncBrowserWorkspace(reason) {
+        var activeTab = getActiveTab();
+        var panel = activeTab ? findWorkspacePanel(activeTab.panelId) : null;
+
+        if (!activeTab || activeTab.workspaceType !== "browser" || !panel) {
+            logBrowserWorkspace("SYNC_HIDE", {
+                reason: reason,
+                activeTab: activeTab ? formatTabIdentity(activeTab.id) : "none",
+                panelFound: !!panel
+            });
+            postBrowserWorkspaceState("hide", activeTab, null, reason);
+            return;
+        }
+
+        var rect = panel.getBoundingClientRect();
+        var bounds = {
+            left: Math.round(rect.left),
+            top: Math.round(rect.top),
+            width: Math.round(rect.width),
+            height: Math.round(rect.height),
+            devicePixelRatio: window.devicePixelRatio || 1,
+            viewportWidth: Math.round(window.innerWidth || 0),
+            viewportHeight: Math.round(window.innerHeight || 0)
+        };
+
+        logBrowserWorkspace("SYNC_SHOW", {
+            reason: reason,
+            tab: formatTabIdentity(activeTab.id),
+            panelId: activeTab.panelId,
+            left: bounds.left,
+            top: bounds.top,
+            width: bounds.width,
+            height: bounds.height,
+            url: pendingBrowserNavigationUrl || defaultBrowserUrl
+        });
+        postBrowserWorkspaceState("show", activeTab, bounds, reason, pendingBrowserNavigationUrl, !!pendingBrowserNavigationUrl);
+        pendingBrowserNavigationUrl = null;
+    }
+
+    function postMailoWorkspaceState(action, tab, bounds, reason) {
+        if (!window.chrome || !window.chrome.webview) {
+            return;
+        }
+
+        window.chrome.webview.postMessage({
+            type: "mailoWorkspaceState",
+            action: action,
+            reason: reason,
+            tabId: tab ? tab.id : null,
+            toolId: tab ? tab.toolId : null,
+            bounds: bounds
+        });
+    }
+
+    function postMailoAction(action) {
+        if (!action || !window.chrome || !window.chrome.webview) {
+            return;
+        }
+
+        logBrowserWorkspace("MAILO_ACTION_BRIDGE", {
+            action: action
+        });
+
+        window.chrome.webview.postMessage({
+            type: "mailoAction",
+            action: action,
+            toolId: mailoToolConfiguration.id
+        });
+    }
+
+    function postCooldownSimulatorAction(action, selectedChannels, payload) {
+        if (!action || !window.chrome || !window.chrome.webview) {
+            return;
+        }
+
+        payload = payload || {};
+
+        window.chrome.webview.postMessage({
+            type: "cooldownSimulatorAction",
+            action: action,
+            toolId: "cooldown-simulator",
+            selectedChannels: Array.isArray(selectedChannels) ? selectedChannels : [],
+            sourceRowIndex: typeof payload.sourceRowIndex === "number" ? payload.sourceRowIndex : null,
+            delta: typeof payload.delta === "number" ? payload.delta : 0,
+            isImportantLaunch: !!payload.isImportantLaunch,
+            isMauAudience: !!payload.isMauAudience,
+            isNauAudience: !!payload.isNauAudience
+        });
+    }
+
+    function postMailoStateToFrames() {
+        if (!workspaceHost) {
+            return;
+        }
+
+        var frames = workspaceHost.querySelectorAll(".workspace-html-frame[data-workspace-type='mailo-v2']");
+        frames.forEach(function (frame) {
+            if (!frame.contentWindow) {
+                return;
+            }
+
+            try {
+                frame.contentWindow.postMessage({
+                    type: "mailo-state",
+                    state: currentMailoState
+                }, "*");
+            } catch (error) {
+            }
+        });
+    }
+
+    function syncEmbeddedWorkspaceThemes(themeName) {
+        if (!workspaceHost) {
+            return;
+        }
+
+        var frames = workspaceHost.querySelectorAll(".workspace-html-frame");
+        frames.forEach(function (frame) {
+            syncEmbeddedWorkspaceFrameTheme(frame, themeName);
+        });
+    }
+
+    function syncEmbeddedWorkspaceFrameTheme(frame, themeName) {
+        if (!frame || !frame.contentWindow) {
+            return;
+        }
+
+        try {
+            frame.contentWindow.postMessage({
+                type: "form3-theme",
+                themeName: themeName || "dark"
+            }, "*");
+        } catch (error) {
+        }
+    }
+
+    function updateCooldownSimulatorWorkspacePanels() {
+        if (!workspaceHost) {
+            return;
+        }
+
+        var panels = workspaceHost.querySelectorAll(".workspace-panel");
+        panels.forEach(function (panel) {
+            updateCooldownSimulatorWorkspacePanel(panel);
+        });
+    }
+
+    function updateCooldownSimulatorWorkspacePanel(panel) {
+        if (!panel || !panel.querySelector(".workspace-cooldown-simulator")) {
+            return;
+        }
+
+        var selectionDisplay = panel.querySelector("[data-role='cooldown-simulator-selection']");
+        var errorDisplay = panel.querySelector("[data-role='cooldown-simulator-error']");
+        var channelsContainer = panel.querySelector("[data-role='cooldown-simulator-channels']");
+        var optimizationSummaryContainer = panel.querySelector("[data-role='cooldown-simulator-optimization-summary']");
+        var improveDelaysButton = panel.querySelector("[data-role='cooldown-simulator-improve-delays']");
+        var resultsErrorDisplay = panel.querySelector("[data-role='cooldown-simulator-results-error']");
+        var exportStatusDisplay = panel.querySelector("[data-role='cooldown-simulator-export-status']");
+        var resultsContainer = panel.querySelector("[data-role='cooldown-simulator-results']");
+        if (!selectionDisplay || !errorDisplay || !channelsContainer || !optimizationSummaryContainer || !improveDelaysButton || !resultsErrorDisplay || !exportStatusDisplay || !resultsContainer) {
+            return;
+        }
+
+        var selectedPath = currentCooldownSimulatorState && typeof currentCooldownSimulatorState.selectedCsvPath === "string"
+            ? currentCooldownSimulatorState.selectedCsvPath
+            : "";
+        var errorMessage = currentCooldownSimulatorState && typeof currentCooldownSimulatorState.errorMessage === "string"
+            ? currentCooldownSimulatorState.errorMessage
+            : "";
+        var channels = currentCooldownSimulatorState && Array.isArray(currentCooldownSimulatorState.channels)
+            ? currentCooldownSimulatorState.channels
+            : [];
+        var analysisErrorMessage = currentCooldownSimulatorState && typeof currentCooldownSimulatorState.analysisErrorMessage === "string"
+            ? currentCooldownSimulatorState.analysisErrorMessage
+            : "";
+        var exportMessage = currentCooldownSimulatorState && typeof currentCooldownSimulatorState.exportMessage === "string"
+            ? currentCooldownSimulatorState.exportMessage
+            : "";
+        var exportMessageIsError = !!(currentCooldownSimulatorState && currentCooldownSimulatorState.exportMessageIsError);
+        var canImproveDelays = !!(currentCooldownSimulatorState && currentCooldownSimulatorState.canImproveDelays);
+        var optimizationSummary = currentCooldownSimulatorState && currentCooldownSimulatorState.optimizationSummary
+            ? currentCooldownSimulatorState.optimizationSummary
+            : null;
+        var analysisResults = currentCooldownSimulatorState && Array.isArray(currentCooldownSimulatorState.analysisResults)
+            ? currentCooldownSimulatorState.analysisResults
+            : [];
+        var previousSelectedPath = panel.getAttribute("data-cooldown-selected-path") || "";
+        var preserveChannelSelection = previousSelectedPath === selectedPath;
+        var previouslyCheckedChannels = new Set();
+
+        if (preserveChannelSelection) {
+            panel.querySelectorAll(".cooldown-simulator-channel-item input[type='checkbox']").forEach(function (checkbox) {
+                if (checkbox.checked && typeof checkbox.value === "string" && checkbox.value.length > 0) {
+                    previouslyCheckedChannels.add(checkbox.value.toLowerCase());
+                }
+            });
+        }
+
+        panel.setAttribute("data-cooldown-selected-path", selectedPath);
+
+        selectionDisplay.textContent = selectedPath && selectedPath.length > 0
+            ? selectedPath
+            : "No CSV selected.";
+        errorDisplay.textContent = errorMessage;
+        errorDisplay.style.display = errorMessage && errorMessage.length > 0 ? "block" : "none";
+        resultsErrorDisplay.textContent = analysisErrorMessage;
+        resultsErrorDisplay.style.display = analysisErrorMessage && analysisErrorMessage.length > 0 ? "block" : "none";
+        exportStatusDisplay.textContent = exportMessage;
+        exportStatusDisplay.style.display = exportMessage && exportMessage.length > 0 ? "block" : "none";
+        exportStatusDisplay.classList.toggle("is-error", exportMessageIsError);
+        exportStatusDisplay.classList.toggle("is-success", !!exportMessage && !exportMessageIsError);
+        improveDelaysButton.style.display = canImproveDelays ? "inline-block" : "none";
+        renderCooldownSimulatorOptimizationSummary(optimizationSummaryContainer, optimizationSummary);
+        resultsContainer.innerHTML = "";
+
+        channelsContainer.innerHTML = "";
+        if (errorMessage && errorMessage.length > 0) {
+            return;
+        }
+
+        if (!channels.length) {
+            return;
+        }
+
+        channels.forEach(function (channelName, index) {
+            var item = document.createElement("label");
+            var checkbox = document.createElement("input");
+            var textNode = document.createElement("span");
+
+            item.className = "cooldown-simulator-channel-item";
+            item.style.display = "block";
+            item.style.marginTop = "6px";
+
+            checkbox.type = "checkbox";
+            checkbox.checked = preserveChannelSelection
+                ? previouslyCheckedChannels.has(String(channelName).toLowerCase())
+                : true;
+            checkbox.value = channelName;
+            checkbox.name = "cooldown-simulator-channel-" + index;
+
+            textNode.textContent = " " + channelName;
+
+            item.appendChild(checkbox);
+            item.appendChild(textNode);
+            channelsContainer.appendChild(item);
+        });
+        if (analysisErrorMessage && analysisErrorMessage.length > 0) {
+            return;
+        }
+
+        if (!analysisResults.length) {
+            return;
+        }
+
+        analysisResults.forEach(function (result) {
+            var card = document.createElement("div");
+            var heading = document.createElement("h4");
+            var total = document.createElement("div");
+            var delayed = document.createElement("div");
+            var expired = document.createElement("div");
+            var maxDelayDays = document.createElement("div");
+            var detailsContainer = document.createElement("div");
+            var detailItems = Array.isArray(result.items)
+                ? result.items
+                : (Array.isArray(result.Items) ? result.Items : []);
+
+            card.className = "cooldown-simulator-result-card";
+            card.style.marginTop = "12px";
+            card.style.padding = "12px";
+            card.style.border = "1px solid rgba(255,255,255,0.15)";
+            card.style.borderRadius = "10px";
+
+            heading.textContent = result.channel || result.Channel || "Unknown channel";
+            total.textContent = "Total: " + formatCooldownSimulatorMetric(result.total, result.Total);
+            delayed.textContent = "Delayed: " + formatCooldownSimulatorMetric(result.delayed, result.Delayed);
+            expired.textContent = "Expired: " + formatCooldownSimulatorMetric(result.expired, result.Expired);
+            maxDelayDays.textContent = "Max delay days: " + formatCooldownSimulatorMetric(result.maxDelayDays, result.MaxDelayDays);
+
+            card.appendChild(heading);
+            card.appendChild(total);
+            card.appendChild(delayed);
+            card.appendChild(expired);
+            card.appendChild(maxDelayDays);
+            detailsContainer.className = "cooldown-simulator-result-details";
+
+            if (detailItems.length) {
+                var detailsTable = document.createElement("table");
+                var detailsHead = document.createElement("thead");
+                var detailsHeadRow = document.createElement("tr");
+                var detailsBody = document.createElement("tbody");
+                var headerLabels = ["Title", "Channel", "Audience", "Provided Severity", "Suggested Severity", "Effective Severity"];
+                if (canImproveDelays) {
+                    headerLabels.push("MAU");
+                    headerLabels.push("NAU");
+                    headerLabels.push("Important Launch");
+                    headerLabels.push("Protected Target");
+                }
+
+                headerLabels.push("Planned Date");
+                headerLabels.push("Actual Date");
+                headerLabels.push("Status");
+                headerLabels.forEach(function (label) {
+                    var headerCell = document.createElement("th");
+                    headerCell.textContent = label;
+                    detailsHeadRow.appendChild(headerCell);
+                });
+
+                detailsHead.appendChild(detailsHeadRow);
+                detailsTable.appendChild(detailsHead);
+
+                detailItems.forEach(function (item) {
+                    var row = document.createElement("tr");
+                    appendCooldownSimulatorDetailCell(row, item.title || item.Title || "");
+                    appendCooldownSimulatorDetailCell(row, formatCooldownSimulatorItemChannel(item));
+                    appendCooldownSimulatorDetailCell(row, formatCooldownSimulatorItemAudience(item));
+                    appendCooldownSimulatorDetailCell(row, item.providedSeverity || item.ProvidedSeverity || "");
+                    appendCooldownSimulatorDetailCell(row, item.suggestedSeverity || item.SuggestedSeverity || "");
+                    appendCooldownSimulatorEffectiveSeverityCell(row, item, canImproveDelays);
+                    if (canImproveDelays) {
+                        appendCooldownSimulatorAudienceCell(row, item, "mau", canImproveDelays);
+                        appendCooldownSimulatorAudienceCell(row, item, "nau", canImproveDelays);
+                        appendCooldownSimulatorImportantLaunchCell(row, item, canImproveDelays);
+                        appendCooldownSimulatorDetailCell(row, formatCooldownSimulatorProtectedTarget(item));
+                    }
+
+                    appendCooldownSimulatorDetailCell(row, item.plannedDate || item.PlannedDate || "");
+                    appendCooldownSimulatorDetailCell(row, item.actualDate || item.ActualDate || "");
+                    appendCooldownSimulatorDetailCell(row, formatCooldownSimulatorItemStatus(item));
+                    detailsBody.appendChild(row);
+                });
+
+                detailsTable.appendChild(detailsBody);
+                detailsContainer.appendChild(detailsTable);
+            }
+
+            card.appendChild(detailsContainer);
+            resultsContainer.appendChild(card);
+        });
+    }
+
+    function appendCooldownSimulatorDetailCell(row, value) {
+        var cell = document.createElement("td");
+        cell.textContent = value;
+        row.appendChild(cell);
+    }
+
+    function appendCooldownSimulatorEffectiveSeverityCell(row, item, isEditable) {
+        var cell = document.createElement("td");
+        var value = getCooldownSimulatorItemEffectiveSeverityValue(item);
+        var sourceRowIndex = getCooldownSimulatorItemSourceRowIndex(item);
+        var isManual = isCooldownSimulatorItemManualSeverityModified(item);
+        var container = document.createElement("div");
+        var valueSpan = document.createElement("span");
+
+        cell.className = "cooldown-simulator-effective-severity-cell";
+        container.className = "cooldown-simulator-effective-severity";
+        if (isManual) {
+            container.classList.add("is-manual");
+            valueSpan.title = "Manually adjusted";
+        }
+
+        valueSpan.className = "cooldown-simulator-effective-severity-value";
+        valueSpan.textContent = value === null ? (item && (item.effectiveSeverity || item.EffectiveSeverity || "")) : String(value);
+        container.appendChild(valueSpan);
+
+        if (isEditable && sourceRowIndex >= 0 && value !== null) {
+            var controls = document.createElement("span");
+            var upButton = document.createElement("button");
+            var downButton = document.createElement("button");
+
+            controls.className = "cooldown-simulator-effective-severity-controls";
+
+            upButton.type = "button";
+            upButton.className = "cooldown-simulator-severity-stepper";
+            upButton.innerHTML = "&uarr;";
+            upButton.disabled = value <= 0;
+            upButton.setAttribute("data-action", "severity-up");
+            upButton.setAttribute("data-row-id", String(sourceRowIndex));
+            upButton.setAttribute("aria-label", "Increase launch urgency");
+
+            downButton.type = "button";
+            downButton.className = "cooldown-simulator-severity-stepper";
+            downButton.innerHTML = "&darr;";
+            downButton.disabled = value >= 4;
+            downButton.setAttribute("data-action", "severity-down");
+            downButton.setAttribute("data-row-id", String(sourceRowIndex));
+            downButton.setAttribute("aria-label", "Decrease launch urgency");
+
+            controls.appendChild(upButton);
+            controls.appendChild(downButton);
+            container.appendChild(controls);
+        }
+
+        cell.appendChild(container);
+        row.appendChild(cell);
+    }
+
+    function appendCooldownSimulatorImportantLaunchCell(row, item, isEditable) {
+        var cell = document.createElement("td");
+        var sourceRowIndex = getCooldownSimulatorItemSourceRowIndex(item);
+        var isImportantLaunch = !!(item && (item.isImportantLaunch || item.IsImportantLaunch));
+
+        if (!isEditable || sourceRowIndex < 0) {
+            cell.textContent = isImportantLaunch ? "Yes" : "No";
+            row.appendChild(cell);
+            return;
+        }
+
+        var checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.checked = isImportantLaunch;
+        checkbox.setAttribute("aria-label", "Mark launch as important");
+        checkbox.addEventListener("change", function () {
+            postCooldownSimulatorAction("set-important-launch", [], {
+                sourceRowIndex: sourceRowIndex,
+                isImportantLaunch: checkbox.checked
+            });
+        });
+
+        cell.appendChild(checkbox);
+        row.appendChild(cell);
+    }
+
+    function appendCooldownSimulatorAudienceCell(row, item, audienceKey, isEditable) {
+        var cell = document.createElement("td");
+        var sourceRowIndex = getCooldownSimulatorItemSourceRowIndex(item);
+        var audienceState = getCooldownSimulatorAudienceState(item);
+        var isChecked = audienceKey === "mau"
+            ? audienceState.isMauAudience
+            : audienceState.isNauAudience;
+
+        if (!isEditable || sourceRowIndex < 0) {
+            cell.textContent = isChecked ? "Yes" : "No";
+            row.appendChild(cell);
+            return;
+        }
+
+        var checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.checked = isChecked;
+        checkbox.setAttribute("data-cooldown-audience", audienceKey);
+        checkbox.setAttribute(
+            "aria-label",
+            audienceKey === "mau" ? "Include launch in MAU audience" : "Include launch in NAU audience");
+        checkbox.addEventListener("change", function () {
+            var mauCheckbox = row.querySelector("input[data-cooldown-audience='mau']");
+            var nauCheckbox = row.querySelector("input[data-cooldown-audience='nau']");
+            postCooldownSimulatorAction("set-launch-audience", [], {
+                sourceRowIndex: sourceRowIndex,
+                isMauAudience: !!(mauCheckbox && mauCheckbox.checked),
+                isNauAudience: !!(nauCheckbox && nauCheckbox.checked)
+            });
+        });
+
+        cell.appendChild(checkbox);
+        row.appendChild(cell);
+    }
+
+    function handleCooldownSimulatorResultsClick(panel, event) {
+        if (!panel || !event) {
+            return;
+        }
+
+        var button = event.target && typeof event.target.closest === "function"
+            ? event.target.closest("button[data-action='severity-up'], button[data-action='severity-down']")
+            : null;
+        if (!button || button.disabled) {
+            return;
+        }
+
+        var rowId = parseInt(button.getAttribute("data-row-id") || "", 10);
+        var action = button.getAttribute("data-action") || "";
+        var delta = action === "severity-up"
+            ? -1
+            : (action === "severity-down" ? 1 : 0);
+        if (!isFinite(rowId) || delta === 0) {
+            return;
+        }
+
+        console.log("[FORM3-COOLDOWN][JS] severity click detected rowId=" + rowId + " action=" + action);
+        if (!applyCooldownSimulatorManualSeverityAdjustment(rowId, delta)) {
+            return;
+        }
+
+        postCooldownSimulatorAction("adjust-effective-severity", [], {
+            sourceRowIndex: rowId,
+            delta: delta
+        });
+    }
+
+    function applyCooldownSimulatorManualSeverityAdjustment(sourceRowIndex, delta) {
+        var target = findCooldownSimulatorAnalysisItemBySourceRowIndex(sourceRowIndex);
+        if (!target) {
+            console.log("[FORM3-COOLDOWN][JS] severity row not found rowId=" + sourceRowIndex);
+            return false;
+        }
+
+        var oldSeverity = getCooldownSimulatorItemEffectiveSeverityValue(target.item);
+        if (oldSeverity === null) {
+            console.log("[FORM3-COOLDOWN][JS] severity value missing rowId=" + sourceRowIndex);
+            return false;
+        }
+
+        var newSeverity = clampCooldownSimulatorSeverity(oldSeverity + delta);
+        console.log("[FORM3-COOLDOWN][JS] severity row resolved rowId=" + sourceRowIndex + " old=" + oldSeverity + " new=" + newSeverity);
+        if (newSeverity === oldSeverity) {
+            return false;
+        }
+
+        setCooldownSimulatorItemSeverityValue(target.item, newSeverity);
+        console.log("[FORM3-COOLDOWN][JS] manual override stored rowId=" + sourceRowIndex + " effectiveSeverity=" + newSeverity);
+        updateCooldownSimulatorWorkspacePanels();
+        console.log("[FORM3-COOLDOWN][JS] rerender completed rowId=" + sourceRowIndex);
+        return true;
+    }
+
+    function findCooldownSimulatorAnalysisItemBySourceRowIndex(sourceRowIndex) {
+        if (!currentCooldownSimulatorState || !Array.isArray(currentCooldownSimulatorState.analysisResults) || !workspaceHost) {
+            return null;
+        }
+
+        var panels = workspaceHost.querySelectorAll(".workspace-panel");
+        for (var panelIndex = 0; panelIndex < panels.length; panelIndex += 1) {
+            var panel = panels[panelIndex];
+            if (!panel || !panel.querySelector(".workspace-cooldown-simulator")) {
+                continue;
+            }
+
+            var analysisResults = currentCooldownSimulatorState.analysisResults;
+            for (var resultIndex = 0; resultIndex < analysisResults.length; resultIndex += 1) {
+                var result = analysisResults[resultIndex];
+                var items = Array.isArray(result && result.items)
+                    ? result.items
+                    : (Array.isArray(result && result.Items) ? result.Items : []);
+                for (var itemIndex = 0; itemIndex < items.length; itemIndex += 1) {
+                    var item = items[itemIndex];
+                    if (getCooldownSimulatorItemSourceRowIndex(item) === sourceRowIndex) {
+                        return {
+                            panel: panel,
+                            item: item
+                        };
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    function setCooldownSimulatorItemSeverityValue(item, severity) {
+        var severityText = String(severity);
+        if (!item) {
+            return;
+        }
+
+        item.effectiveSeverity = severityText;
+        item.EffectiveSeverity = severityText;
+        item.manualSeverityOverride = severityText;
+        item.ManualSeverityOverride = severityText;
+        item.isManualSeverityModified = true;
+        item.IsManualSeverityModified = true;
+    }
+
+    function clampCooldownSimulatorSeverity(value) {
+        if (value < 0) {
+            return 0;
+        }
+
+        if (value > 4) {
+            return 4;
+        }
+
+        return value;
+    }
+
+    function renderCooldownSimulatorOptimizationSummary(container, summary) {
+        if (!container) {
+            return;
+        }
+
+        container.innerHTML = "";
+        container.style.display = "none";
+
+        if (!summary) {
+            return;
+        }
+
+        var heading = document.createElement("h4");
+        var metricsList = document.createElement("div");
+        var changes = Array.isArray(summary.changes)
+            ? summary.changes
+            : (Array.isArray(summary.Changes) ? summary.Changes : []);
+
+        container.style.display = "block";
+        heading.textContent = "Optimization summary";
+        metricsList.className = "cooldown-simulator-optimization-metrics";
+
+        appendCooldownSimulatorOptimizationMetric(
+            metricsList,
+            "Channels improved",
+            formatCooldownSimulatorMetric(summary.channelsImproved, summary.ChannelsImproved));
+        appendCooldownSimulatorOptimizationMetric(
+            metricsList,
+            "Severity changes made",
+            formatCooldownSimulatorMetric(summary.severityChangesMade, summary.SeverityChangesMade));
+        appendCooldownSimulatorOptimizationMetric(
+            metricsList,
+            "Expired",
+            formatCooldownSimulatorTransitionMetric(summary.expiredBefore, summary.ExpiredBefore, summary.expiredAfter, summary.ExpiredAfter));
+        appendCooldownSimulatorOptimizationMetric(
+            metricsList,
+            "Delayed 7+ days",
+            formatCooldownSimulatorTransitionMetric(summary.delayedSevenPlusBefore, summary.DelayedSevenPlusBefore, summary.delayedSevenPlusAfter, summary.DelayedSevenPlusAfter));
+        appendCooldownSimulatorOptimizationMetric(
+            metricsList,
+            "Delayed",
+            formatCooldownSimulatorTransitionMetric(summary.delayedBefore, summary.DelayedBefore, summary.delayedAfter, summary.DelayedAfter));
+
+        container.appendChild(heading);
+        container.appendChild(metricsList);
+
+        if (!changes.length) {
+            return;
+        }
+
+        var changesHeading = document.createElement("div");
+        var changesTable = document.createElement("table");
+        var changesHead = document.createElement("thead");
+        var changesHeadRow = document.createElement("tr");
+        var changesBody = document.createElement("tbody");
+        var detailsWrapper = document.createElement("div");
+
+        changesHeading.className = "cooldown-simulator-optimization-changes-heading";
+        changesHeading.textContent = "Severity changes";
+        detailsWrapper.className = "cooldown-simulator-result-details";
+
+        ["Title", "Channel", "Original Effective Severity", "Optimized Severity", "Previous Status", "New Status", "Previous Delay Days", "New Delay Days"].forEach(function (label) {
+            var headerCell = document.createElement("th");
+            headerCell.textContent = label;
+            changesHeadRow.appendChild(headerCell);
+        });
+
+        changesHead.appendChild(changesHeadRow);
+        changesTable.appendChild(changesHead);
+
+        changes.forEach(function (change) {
+            var row = document.createElement("tr");
+            appendCooldownSimulatorDetailCell(row, change.title || change.Title || "");
+            appendCooldownSimulatorDetailCell(row, change.channel || change.Channel || "");
+            appendCooldownSimulatorDetailCell(row, change.originalEffectiveSeverity || change.OriginalEffectiveSeverity || "");
+            appendCooldownSimulatorDetailCell(row, change.optimizedSeverity || change.OptimizedSeverity || "");
+            appendCooldownSimulatorDetailCell(row, change.previousStatus || change.PreviousStatus || "");
+            appendCooldownSimulatorDetailCell(row, change.newStatus || change.NewStatus || "");
+            appendCooldownSimulatorDetailCell(row, formatCooldownSimulatorMetric(change.previousDelayDays, change.PreviousDelayDays));
+            appendCooldownSimulatorDetailCell(row, formatCooldownSimulatorMetric(change.newDelayDays, change.NewDelayDays));
+            changesBody.appendChild(row);
+        });
+
+        changesTable.appendChild(changesBody);
+        detailsWrapper.appendChild(changesTable);
+        container.appendChild(changesHeading);
+        container.appendChild(detailsWrapper);
+    }
+
+    function appendCooldownSimulatorOptimizationMetric(container, label, value) {
+        var item = document.createElement("div");
+        item.className = "cooldown-simulator-optimization-metric";
+        item.textContent = label + ": " + value;
+        container.appendChild(item);
+    }
+
+    function formatCooldownSimulatorTransitionMetric(beforePrimary, beforeFallback, afterPrimary, afterFallback) {
+        return formatCooldownSimulatorMetric(beforePrimary, beforeFallback) + " -> " +
+            formatCooldownSimulatorMetric(afterPrimary, afterFallback);
+    }
+
+    function formatCooldownSimulatorItemStatus(item) {
+        var status = item && (item.status || item.Status || "");
+        var delayDisplay = item && (item.delayDisplay || item.DelayDisplay || "");
+        if (status === "delayed" && delayDisplay) {
+            return status + " (" + delayDisplay + ")";
+        }
+
+        return status;
+    }
+
+    function formatCooldownSimulatorProtectedTarget(item) {
+        var isImportantLaunch = !!(item && (item.isImportantLaunch || item.IsImportantLaunch));
+        if (!isImportantLaunch) {
+            return "";
+        }
+
+        return item && (item.protectedTargetAchieved || item.ProtectedTargetAchieved)
+            ? "met"
+            : "missed";
+    }
+
+    function formatCooldownSimulatorItemChannel(item) {
+        return item && (item.channel || item.Channel || "") || "";
+    }
+
+    function formatCooldownSimulatorItemAudience(item) {
+        if (item && typeof item.audienceLabel === "string" && item.audienceLabel.length > 0) {
+            return item.audienceLabel;
+        }
+
+        if (item && typeof item.AudienceLabel === "string" && item.AudienceLabel.length > 0) {
+            return item.AudienceLabel;
+        }
+
+        var audienceState = getCooldownSimulatorAudienceState(item);
+        if (audienceState.isMauAudience && !audienceState.isNauAudience) {
+            return "MAU";
+        }
+
+        if (!audienceState.isMauAudience && audienceState.isNauAudience) {
+            return "NAU";
+        }
+
+        return "BOTH";
+    }
+
+    function getCooldownSimulatorItemSourceRowIndex(item) {
+        if (!item) {
+            return -1;
+        }
+
+        if (typeof item.sourceRowIndex === "number") {
+            return item.sourceRowIndex;
+        }
+
+        if (typeof item.SourceRowIndex === "number") {
+            return item.SourceRowIndex;
+        }
+
+        return -1;
+    }
+
+    function getCooldownSimulatorAudienceState(item) {
+        var isMauAudience = !!(item && (item.isMauAudience || item.IsMauAudience));
+        var isNauAudience = !!(item && (item.isNauAudience || item.IsNauAudience));
+
+        return {
+            isMauAudience: isMauAudience,
+            isNauAudience: isNauAudience
+        };
+    }
+
+    function getCooldownSimulatorItemEffectiveSeverityValue(item) {
+        var rawValue = item && (item.effectiveSeverity || item.EffectiveSeverity || "");
+        if (typeof rawValue !== "string" && typeof rawValue !== "number") {
+            return null;
+        }
+
+        var parsed = parseInt(String(rawValue), 10);
+        return isNaN(parsed) ? null : parsed;
+    }
+
+    function isCooldownSimulatorItemManualSeverityModified(item) {
+        return !!(item && (item.isManualSeverityModified || item.IsManualSeverityModified));
+    }
+
+    function collectSelectedCooldownSimulatorChannels(panel) {
+        if (!panel) {
+            return [];
+        }
+
+        var checkboxes = panel.querySelectorAll(".cooldown-simulator-channel-item input[type='checkbox']");
+        var selectedChannels = [];
+        checkboxes.forEach(function (checkbox) {
+            if (checkbox.checked && typeof checkbox.value === "string" && checkbox.value.length > 0) {
+                selectedChannels.push(checkbox.value);
+            }
+        });
+        return selectedChannels;
+    }
+
+    function formatCooldownSimulatorMetric(primaryValue, fallbackValue) {
+        if (typeof primaryValue === "number") {
+            return String(primaryValue);
+        }
+
+        if (typeof fallbackValue === "number") {
+            return String(fallbackValue);
+        }
+
+        return "0";
+    }
+
+    function postBrowserWorkspaceState(action, tab, bounds, reason, requestedUrl, forceNavigation) {
+        if (!window.chrome || !window.chrome.webview) {
+            return;
+        }
+
+        window.chrome.webview.postMessage({
+            type: "browserWorkspaceState",
+            action: action,
+            reason: reason,
+            tabId: tab ? tab.id : null,
+            toolId: tab ? tab.toolId : null,
+            url: action === "show"
+                ? (requestedUrl || (!tab ? defaultBrowserUrl : null))
+                : null,
+            forceNavigation: !!forceNavigation,
+            bounds: bounds
+        });
+    }
+
+    function pushBrowserThemeState(reason) {
+        if (!window.chrome || !window.chrome.webview) {
+            return;
+        }
+
+        window.chrome.webview.postMessage({
+            type: "browserThemeState",
+            reason: reason,
+            themeName: root.getAttribute("data-theme") || "dark",
+            palette: {
+                toolbarBackground: getRootVariableValue("--color-bg-panel"),
+                toolbarSurface: getRootVariableValue("--color-bg-card"),
+                buttonRestBackground: getRootVariableValue("--color-button-secondary-bg"),
+                buttonRestText: getRootVariableValue("--color-button-secondary-text"),
+                buttonHoverStart: getRootVariableValue("--color-primary"),
+                buttonHoverEnd: getRootVariableValue("--color-primary-hover"),
+                buttonHoverText: getRootVariableValue("--color-button-primary-text"),
+                inputBackground: getRootVariableValue("--color-bg-input"),
+                inputText: getRootVariableValue("--color-text-main"),
+                inputMutedText: getRootVariableValue("--color-text-muted"),
+                inputBorder: getRootVariableValue("--color-border"),
+                inputBorderSubtle: getRootVariableValue("--color-border-subtle"),
+                inputBorderStrong: getRootVariableValue("--color-border-strong"),
+                toolbarText: getRootVariableValue("--color-text-main"),
+                toolbarSecondaryText: getRootVariableValue("--color-text-secondary"),
+                toolbarDisabledText: getRootVariableValue("--color-text-disabled"),
+                divider: getRootVariableValue("--color-divider")
+            }
+        });
+    }
+
+    function sanitizeLogValue(value) {
+        return String(value).replace(/"/g, "'");
+    }
+
+    function logTabDrag(step, details) {
+        var parts = [tabDragLogPrefix, step];
+        var keys = Object.keys(details || {});
+
+        keys.forEach(function (key) {
+            parts.push(key + "=" + formatLogValue(details[key]));
+        });
+
+        var message = parts.join(" ");
+        console.log(message);
+        forwardTabDragLog(message);
+    }
+
+    function logBrowserWorkspace(step, details) {
+        var parts = [browserLogPrefix, step];
+        var keys = Object.keys(details || {});
+
+        keys.forEach(function (key) {
+            parts.push(key + "=" + formatLogValue(details[key]));
+        });
+
+        var message = parts.join(" ");
+        console.log(message);
+        forwardBrowserWorkspaceLog(message);
+    }
+
+    function formatLogValue(value) {
+        if (value === null) {
+            return "null";
+        }
+
+        if (value === undefined) {
+            return "undefined";
+        }
+
+        if (typeof value === "string") {
+            return "\"" + sanitizeLogValue(value) + "\"";
+        }
+
+        return String(value);
+    }
+
+    function logPointerInput(step, event) {
+        var tab = event.target.closest ? event.target.closest(".tab-button") : null;
+
+        logTabDrag(step, {
+            tab: tab ? formatTabIdentity(tab.dataset.tabId) : "none",
+            visualIndex: tab ? getVisualIndexById(tab.dataset.tabId) : -1,
+            modelIndex: tab ? getModelIndexById(tab.dataset.tabId) : -1,
+            x: event.clientX,
+            y: event.clientY,
+            scrollLeft: tabsBar ? tabsBar.scrollLeft : 0,
+            targetRole: getEventTargetRole(event.target)
+        });
+    }
+
+    function forwardTabDragLog(message) {
+        if (!window.chrome || !window.chrome.webview) {
+            return;
+        }
+
+        window.chrome.webview.postMessage({
+            type: "tabDragDiagnostic",
+            message: message
+        });
+    }
+
+    function forwardBrowserWorkspaceLog(message) {
+        if (!window.chrome || !window.chrome.webview) {
+            return;
+        }
+
+        window.chrome.webview.postMessage({
+            type: "browserDiagnostic",
+            message: message
+        });
+    }
+});

@@ -1,0 +1,249 @@
+(function () {
+    "use strict";
+
+    var currentData = null;
+    var ganttMeta = null;
+    var ganttEmpty = null;
+    var ganttBoard = null;
+    var laneLabelWidth = 180;
+    var minimumTrackWidth = 900;
+    var pixelsPerDay = 160;
+
+    document.addEventListener("DOMContentLoaded", function () {
+        ganttMeta = document.getElementById("ganttMeta");
+        ganttEmpty = document.getElementById("ganttEmpty");
+        ganttBoard = document.getElementById("ganttBoard");
+        renderGantt();
+    });
+
+    window.cooldownGanttSetData = function (data) {
+        currentData = data || null;
+        renderGantt();
+    };
+
+    function renderGantt() {
+        if (!ganttMeta || !ganttEmpty || !ganttBoard) {
+            return;
+        }
+
+        ganttBoard.innerHTML = "";
+        var lanes = currentData && Array.isArray(currentData.lanes)
+            ? currentData.lanes
+            : (currentData && Array.isArray(currentData.Lanes) ? currentData.Lanes : []);
+        var generatedAt = currentData && (currentData.generatedAt || currentData.GeneratedAt || "");
+        ganttMeta.textContent = generatedAt ? "Generated " + generatedAt : "";
+
+        var timelineItems = collectTimelineItems(lanes);
+        if (!timelineItems.length) {
+            ganttEmpty.style.display = "block";
+            ganttBoard.style.display = "none";
+            return;
+        }
+
+        ganttEmpty.style.display = "none";
+        ganttBoard.style.display = "grid";
+
+        var bounds = getTimelineBounds(timelineItems);
+        var trackWidth = Math.max(minimumTrackWidth, Math.ceil((bounds.max - bounds.min) / 86400000 * pixelsPerDay));
+        ganttBoard.style.gridTemplateColumns = laneLabelWidth + "px " + trackWidth + "px";
+        ganttBoard.appendChild(createCornerCell());
+        ganttBoard.appendChild(createAxisTrack(bounds, trackWidth));
+
+        lanes.forEach(function (lane) {
+            appendLane(ganttBoard, lane, bounds, trackWidth);
+        });
+    }
+
+    function collectTimelineItems(lanes) {
+        var items = [];
+        lanes.forEach(function (lane) {
+            var laneItems = Array.isArray(lane.items) ? lane.items : (Array.isArray(lane.Items) ? lane.Items : []);
+            laneItems.forEach(function (item) {
+                var plannedTime = parseTimelineDate(item.plannedUtc || item.PlannedUtc || item.plannedDateIso || item.PlannedDateIso);
+                var actualTime = parseTimelineDate(item.actualDateIso || item.ActualDateIso);
+                var endTime = parseTimelineDate(item.endUtc || item.EndUtc || item.endDateIso || item.EndDateIso);
+                if (isFinite(plannedTime) && isFinite(actualTime)) {
+                    items.push({
+                        plannedTime: plannedTime,
+                        actualTime: actualTime,
+                        endTime: isFinite(endTime) ? endTime : NaN
+                    });
+                }
+            });
+        });
+        return items;
+    }
+
+    function getTimelineBounds(items) {
+        var min = items[0].plannedTime;
+        var max = items[0].actualTime;
+        items.forEach(function (item) {
+            min = Math.min(min, item.plannedTime, item.actualTime);
+            max = Math.max(max, item.plannedTime, item.actualTime, isFinite(item.endTime) ? item.endTime : item.actualTime);
+        });
+
+        if (min === max) {
+            max = min + 86400000;
+        }
+
+        return {
+            min: min - 43200000,
+            max: max + 43200000
+        };
+    }
+
+    function createCornerCell() {
+        var corner = document.createElement("div");
+        corner.className = "gantt-corner-cell";
+        corner.textContent = "Channel";
+        return corner;
+    }
+
+    function createAxisTrack(bounds, trackWidth) {
+        var track = document.createElement("div");
+        var firstTick = startOfDay(bounds.min);
+
+        track.className = "gantt-axis-track";
+        track.style.width = trackWidth + "px";
+
+        for (var tick = firstTick; tick <= bounds.max + 86400000; tick += 86400000) {
+            var left = getTimelinePosition(tick, bounds, trackWidth);
+            var tickLine = document.createElement("div");
+            var tickLabel = document.createElement("div");
+
+            tickLine.className = "gantt-axis-tick";
+            tickLine.style.left = left + "px";
+
+            tickLabel.className = "gantt-axis-label";
+            tickLabel.style.left = left + "px";
+            tickLabel.textContent = formatAxisDate(tick);
+
+            track.appendChild(tickLine);
+            track.appendChild(tickLabel);
+        }
+
+        return track;
+    }
+
+    function appendLane(board, lane, bounds, trackWidth) {
+        var label = document.createElement("div");
+        var track = document.createElement("div");
+        var laneItems = Array.isArray(lane.items) ? lane.items : (Array.isArray(lane.Items) ? lane.Items : []);
+        var firstTick = startOfDay(bounds.min);
+
+        label.className = "gantt-lane-label";
+        label.textContent = lane.channel || lane.Channel || "Unknown channel";
+
+        track.className = "gantt-lane-track";
+        track.style.width = trackWidth + "px";
+
+        for (var tick = firstTick; tick <= bounds.max + 86400000; tick += 86400000) {
+            var gridline = document.createElement("div");
+            gridline.className = "gantt-lane-gridline";
+            gridline.style.left = getTimelinePosition(tick, bounds, trackWidth) + "px";
+            track.appendChild(gridline);
+        }
+
+        laneItems.forEach(function (item) {
+            var plannedTime = parseTimelineDate(item.plannedUtc || item.PlannedUtc || item.plannedDateIso || item.PlannedDateIso);
+            var actualTime = parseTimelineDate(item.actualDateIso || item.ActualDateIso);
+            var endTime = parseTimelineDate(item.endUtc || item.EndUtc || item.endDateIso || item.EndDateIso);
+            if (!isFinite(plannedTime) || !isFinite(actualTime)) {
+                return;
+            }
+
+            track.appendChild(createTimelineItem(item, plannedTime, actualTime, endTime, bounds, trackWidth));
+        });
+
+        board.appendChild(label);
+        board.appendChild(track);
+    }
+
+    function createTimelineItem(item, plannedTime, actualTime, endTime, bounds, trackWidth) {
+        var itemElement = document.createElement("div");
+        var label = document.createElement("div");
+        var windowBar = document.createElement("div");
+        var plannedMarker = document.createElement("div");
+        var actualMarker = document.createElement("div");
+        var plannedLeft = getTimelinePosition(plannedTime, bounds, trackWidth);
+        var actualLeft = getTimelinePosition(actualTime, bounds, trackWidth);
+        var hasWindow = isFinite(endTime) && endTime >= plannedTime;
+        var endLeft = hasWindow ? getTimelinePosition(endTime, bounds, trackWidth) : plannedLeft;
+        var status = item.status || item.Status || "";
+        var title = item.title || item.Title || "Untitled";
+
+        itemElement.className = "gantt-item";
+        if (status === "expired") {
+            itemElement.classList.add("is-expired");
+        }
+        if (hasWindow) {
+            itemElement.classList.add("has-window");
+        }
+
+        label.className = "gantt-item-label";
+        label.style.left = Math.max(0, Math.min(trackWidth - 230, Math.max(actualLeft, endLeft) + 10)) + "px";
+        label.textContent = title;
+
+        if (hasWindow) {
+            windowBar.className = "gantt-item-window";
+            windowBar.style.left = plannedLeft + "px";
+            windowBar.style.width = Math.max(6, endLeft - plannedLeft) + "px";
+            windowBar.title = "Window: " +
+                (item.plannedDate || item.PlannedDate || "") +
+                " - " +
+                (item.endDate || item.EndDate || "");
+            itemElement.appendChild(windowBar);
+        }
+
+        plannedMarker.className = "gantt-item-planned";
+        plannedMarker.style.left = plannedLeft + "px";
+        plannedMarker.title = "Planned: " + (item.plannedDate || item.PlannedDate || "");
+
+        actualMarker.className = "gantt-item-actual";
+        actualMarker.style.left = actualLeft + "px";
+        actualMarker.title = "Actual: " + (item.actualDate || item.ActualDate || "");
+
+        if (actualLeft !== plannedLeft) {
+            var connector = document.createElement("div");
+            connector.className = "gantt-item-line";
+            connector.style.left = Math.min(plannedLeft, actualLeft) + "px";
+            connector.style.width = Math.max(2, Math.abs(actualLeft - plannedLeft)) + "px";
+            itemElement.appendChild(connector);
+        }
+
+        itemElement.appendChild(label);
+        itemElement.appendChild(plannedMarker);
+        itemElement.appendChild(actualMarker);
+        return itemElement;
+    }
+
+    function getTimelinePosition(timeValue, bounds, trackWidth) {
+        if (bounds.max <= bounds.min) {
+            return 0;
+        }
+
+        return Math.round((timeValue - bounds.min) / (bounds.max - bounds.min) * trackWidth);
+    }
+
+    function parseTimelineDate(value) {
+        if (typeof value !== "string" || !value.length) {
+            return NaN;
+        }
+
+        return Date.parse(value);
+    }
+
+    function startOfDay(timeValue) {
+        var date = new Date(timeValue);
+        date.setHours(0, 0, 0, 0);
+        return date.getTime();
+    }
+
+    function formatAxisDate(timeValue) {
+        var date = new Date(timeValue);
+        var year = String(date.getFullYear());
+        var month = String(date.getMonth() + 1).padStart(2, "0");
+        var day = String(date.getDate()).padStart(2, "0");
+        return year + "-" + month + "-" + day;
+    }
+})();
