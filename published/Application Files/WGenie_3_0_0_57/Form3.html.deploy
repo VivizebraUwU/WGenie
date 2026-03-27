@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WGenie Form3</title>
+    <link rel="stylesheet" href="theme.css">
+    <link rel="stylesheet" href="Form3.css">
+</head>
+<body>
+    <div class="app-shell">
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <span class="eyebrow">Toolbox</span>
+                <h1>WGenie</h1>
+            </div>
+            <div class="sidebar-actions">
+                <button class="theme-toggle" id="themeToggle" type="button" aria-pressed="false">
+                    Light theme
+                </button>
+            </div>
+            <div class="tool-list" id="toolList"></div>
+        </aside>
+
+        <main class="main-panel">
+            <section class="message-bar" id="messageBar">
+                <span class="message-label">System</span>
+                <span class="message-text">Form3 local shell loaded successfully. Tool content is currently placeholder-only.</span>
+            </section>
+
+            <nav class="tabs-bar" aria-label="Open tools"></nav>
+
+            <section class="content-area">
+                <div class="content-card">
+                    <div class="workspace-empty" id="workspaceEmpty">
+                        <p class="content-kicker">Active Tab</p>
+                        <h2>No tool open</h2>
+                        <p>
+                            Select a tool from the toolbox to open a tab and launch the matching Form2 interface.
+                        </p>
+                    </div>
+                    <div class="workspace-host" id="workspaceHost"></div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="Form3.js"></script>
+</body>
+</html>

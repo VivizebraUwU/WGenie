@@ -1,0 +1,230 @@
+html,
+body {
+    margin: 0;
+    height: 100%;
+    font-family: "Segoe UI", Tahoma, sans-serif;
+    background: #10151d;
+    color: #e6edf6;
+}
+
+body {
+    overflow: hidden;
+}
+
+.gantt-shell {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.gantt-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    gap: 24px;
+    padding: 20px 24px 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    background: linear-gradient(135deg, rgba(33, 43, 58, 0.95), rgba(18, 24, 33, 0.95));
+}
+
+.gantt-kicker {
+    margin: 0 0 6px;
+    font-size: 0.78rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #8fb2d8;
+}
+
+.gantt-header h1 {
+    margin: 0;
+    font-size: 1.7rem;
+}
+
+.gantt-meta {
+    color: #93a3b8;
+    font-size: 0.92rem;
+    text-align: right;
+}
+
+.gantt-content {
+    flex: 1 1 auto;
+    min-height: 0;
+    padding: 18px 24px 24px;
+    overflow: auto;
+    position: relative;
+}
+
+.gantt-empty {
+    display: none;
+    padding: 24px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.03);
+    color: #b5c2d3;
+}
+
+.gantt-board {
+    display: none;
+    grid-auto-flow: row;
+    width: max-content;
+    min-width: calc(180px + 900px);
+    align-items: stretch;
+}
+
+.gantt-corner-cell,
+.gantt-axis-track {
+    height: 42px;
+    position: sticky;
+    top: 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    background: #16202c;
+}
+
+.gantt-corner-cell {
+    left: 0;
+    z-index: 40;
+    display: flex;
+    align-items: center;
+    padding: 0 12px 0 0;
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #9eb3ca;
+    box-shadow: 1px 0 0 rgba(255, 255, 255, 0.08);
+}
+
+.gantt-axis-track {
+    z-index: 30;
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.gantt-axis-tick {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.gantt-axis-label {
+    position: absolute;
+    top: 6px;
+    transform: translateX(-50%);
+    font-size: 0.78rem;
+    color: #8ea3bb;
+    white-space: nowrap;
+}
+
+.gantt-lane-label {
+    position: sticky;
+    left: 0;
+    z-index: 20;
+    display: flex;
+    align-items: flex-start;
+    align-self: stretch;
+    padding: 12px 12px 12px 0;
+    font-weight: 600;
+    color: #d7e3ef;
+    background: #10151d;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    box-shadow: 1px 0 0 rgba(255, 255, 255, 0.06);
+}
+
+.gantt-lane-track {
+    position: relative;
+    padding: 10px 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    min-height: 54px;
+}
+
+.gantt-lane-gridline {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.gantt-item {
+    position: relative;
+    height: 34px;
+    margin-bottom: 8px;
+}
+
+.gantt-item:last-child {
+    margin-bottom: 0;
+}
+
+.gantt-item-label {
+    position: absolute;
+    left: 0;
+    top: 0;
+    transform: translateY(-2px);
+    max-width: 220px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(19, 84, 122, 0.35);
+    color: #dcecfb;
+    font-size: 0.78rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.gantt-item-window {
+    position: absolute;
+    top: 16px;
+    height: 12px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, rgba(87, 178, 255, 0.24), rgba(125, 248, 214, 0.2));
+    border: 1px solid rgba(125, 248, 214, 0.35);
+}
+
+.gantt-item-line {
+    position: absolute;
+    top: 22px;
+    height: 2px;
+    background: linear-gradient(90deg, #57b2ff, #7df8d6);
+    opacity: 0.85;
+}
+
+.gantt-item-planned,
+.gantt-item-actual {
+    position: absolute;
+    top: 16px;
+    width: 12px;
+    height: 12px;
+    margin-left: -6px;
+    border-radius: 50%;
+    border: 2px solid #0f141b;
+}
+
+.gantt-item-planned {
+    background: #57b2ff;
+    box-shadow: 0 0 0 3px rgba(87, 178, 255, 0.18);
+}
+
+.gantt-item-actual {
+    background: #7df8d6;
+    box-shadow: 0 0 0 3px rgba(125, 248, 214, 0.18);
+}
+
+.gantt-item.is-expired .gantt-item-line {
+    background: linear-gradient(90deg, #57b2ff, #ff7d99);
+}
+
+.gantt-item.is-expired .gantt-item-window {
+    background: linear-gradient(90deg, rgba(87, 178, 255, 0.2), rgba(255, 125, 153, 0.24));
+    border-color: rgba(255, 125, 153, 0.45);
+}
+
+.gantt-item.is-expired .gantt-item-actual {
+    background: #ff7d99;
+    border-radius: 2px;
+    transform: rotate(45deg);
+    box-shadow: 0 0 0 3px rgba(255, 125, 153, 0.18);
+}
+
+.gantt-item.is-expired .gantt-item-label {
+    background: rgba(122, 33, 58, 0.35);
+}
