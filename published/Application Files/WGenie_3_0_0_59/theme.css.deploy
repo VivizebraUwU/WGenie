@@ -1,0 +1,163 @@
+/* ==========================================================================
+   THEME STYLE GUIDE
+   --------------------------------------------------------------------------
+   Usage:
+   - Default theme is dark (:root).
+   - Apply light theme by setting: [data-theme="light"]
+   - Apply dark theme explicitly with: [data-theme="dark"]
+
+   Design intent:
+   - Keep the palette close to the existing cyan / teal / navy identity.
+   - Add only a small set of supporting neutrals and readable semantic tokens.
+   - Favor strong contrast, large dark surfaces, and bright interactive accents.
+   ========================================================================== */
+
+:root,
+[data-theme="dark"] {
+    /* ----------------------------------------------------------------------
+       CORE BRAND COLORS
+       ---------------------------------------------------------------------- */
+    --color-primary: #00A5F5;
+    --color-primary-hover: #00B4B9;
+    --color-primary-active: #0089CC;
+    --color-primary-soft: #00325A;
+
+    /* ----------------------------------------------------------------------
+       BACKGROUND SYSTEM
+       Style guide:
+       - Main app background should stay very dark.
+       - Panels/cards should be one step lighter than the main background.
+       - Elevated/interactive dark surfaces should stay within the same navy family.
+       ---------------------------------------------------------------------- */
+    --color-bg-main: #001428;
+    --color-bg-panel: #00325A;
+    --color-bg-sidebar: #001428;
+    --color-bg-card: #06213A;
+    --color-bg-elevated: #0A2B49;
+    --color-bg-input: #06213A;
+    --color-bg-overlay: rgba(0, 20, 40, 0.78);
+
+    /* ----------------------------------------------------------------------
+       TEXT SYSTEM
+       Style guide:
+       - Use high-contrast white for primary text on dark surfaces.
+       - Use cool muted blues/greys for secondary and disabled text.
+       ---------------------------------------------------------------------- */
+    --color-text-main: #FFFFFF;
+    --color-text-secondary: #C7D6E5;
+    --color-text-muted: #8AA3BD;
+    --color-text-disabled: #5E7287;
+    --color-text-on-accent: #001428;
+    --color-text-inverse: #001428;
+
+    /* ----------------------------------------------------------------------
+       BORDER / DIVIDER SYSTEM
+       Style guide:
+       - Use subtle borders for large surfaces.
+       - Use stronger borders only for focus or active states.
+       ---------------------------------------------------------------------- */
+    --color-border: #00325A;
+    --color-border-subtle: #0A2B49;
+    --color-border-strong: #00A5F5;
+    --color-divider: rgba(199, 214, 229, 0.14);
+
+    /* ----------------------------------------------------------------------
+       INTERACTION / FEEDBACK
+       ---------------------------------------------------------------------- */
+    --color-focus-ring: rgba(0, 165, 245, 0.38);
+    --color-selection: rgba(0, 165, 245, 0.22);
+    --color-shadow: rgba(0, 0, 0, 0.35);
+
+    /* ----------------------------------------------------------------------
+       STATUS COLORS
+       Style guide:
+       - Keep semantic colors vivid enough to stand out from dark surfaces.
+       ---------------------------------------------------------------------- */
+    --color-success: #00B4B9;
+    --color-success-soft: rgba(0, 180, 185, 0.18);
+
+    --color-warning: #F56914;
+    --color-warning-soft: rgba(245, 105, 20, 0.18);
+
+    --color-error: #E60028;
+    --color-error-soft: rgba(230, 0, 40, 0.18);
+
+    /* ----------------------------------------------------------------------
+       COMMON COMPONENT TOKENS
+       ---------------------------------------------------------------------- */
+    --color-button-primary-bg: var(--color-primary);
+    --color-button-primary-hover: var(--color-primary-hover);
+    --color-button-primary-text: var(--color-text-on-accent);
+
+    --color-button-secondary-bg: var(--color-bg-elevated);
+    --color-button-secondary-hover: var(--color-bg-panel);
+    --color-button-secondary-text: var(--color-text-main);
+
+    --color-surface-highlight: rgba(0, 165, 245, 0.10);
+}
+
+/* ==========================================================================
+   LIGHT THEME
+   --------------------------------------------------------------------------
+   Style guide:
+   - Keep the same cyan / teal identity.
+   - Swap dark navy surfaces for pale blue-grey surfaces.
+   - Preserve clear hierarchy: page -> panel -> card -> elevated.
+   - Maintain strong readability without drifting into pure grayscale.
+   ========================================================================== */
+[data-theme="light"] {
+    /* Core brand colors */
+    --color-primary: #00A5F5;
+    --color-primary-hover: #00B4B9;
+    --color-primary-active: #0089CC;
+    --color-primary-soft: #D8F3FF;
+
+    /* Background system */
+    --color-bg-main: #F4FAFD;
+    --color-bg-panel: #E8F4FA;
+    --color-bg-sidebar: #D8F0FA;
+    --color-bg-card: #FFFFFF;
+    --color-bg-elevated: #F8FCFE;
+    --color-bg-input: #FFFFFF;
+    --color-bg-overlay: rgba(0, 20, 40, 0.10);
+
+    /* Text system */
+    --color-text-main: #001428;
+    --color-text-secondary: #00325A;
+    --color-text-muted: #4F6478;
+    --color-text-disabled: #7D92A6;
+    --color-text-on-accent: #FFFFFF;
+    --color-text-inverse: #FFFFFF;
+
+    /* Border / divider system */
+    --color-border: #B7D8E8;
+    --color-border-subtle: #D7EAF3;
+    --color-border-strong: #00A5F5;
+    --color-divider: rgba(0, 50, 90, 0.12);
+
+    /* Interaction / feedback */
+    --color-focus-ring: rgba(0, 165, 245, 0.28);
+    --color-selection: rgba(0, 165, 245, 0.16);
+    --color-shadow: rgba(0, 20, 40, 0.10);
+
+    /* Status colors */
+    --color-success: #00B4B9;
+    --color-success-soft: rgba(0, 180, 185, 0.12);
+
+    --color-warning: #F56914;
+    --color-warning-soft: rgba(245, 105, 20, 0.12);
+
+    --color-error: #E60028;
+    --color-error-soft: rgba(230, 0, 40, 0.12);
+
+    /* Common component tokens */
+    --color-button-primary-bg: var(--color-primary);
+    --color-button-primary-hover: var(--color-primary-hover);
+    --color-button-primary-text: var(--color-text-on-accent);
+
+    --color-button-secondary-bg: var(--color-bg-card);
+    --color-button-secondary-hover: var(--color-bg-panel);
+    --color-button-secondary-text: var(--color-text-main);
+
+    --color-surface-highlight: rgba(0, 165, 245, 0.08);
+}
