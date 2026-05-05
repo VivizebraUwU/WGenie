@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cooldown Gantt View</title>
+    <link rel="stylesheet" href="CooldownGantt.css">
+</head>
+<body>
+    <div class="gantt-shell">
+        <header class="gantt-header">
+            <div>
+                <p class="gantt-kicker">Cooldown Simulator</p>
+                <h1>Gantt View</h1>
+            </div>
+            <div class="gantt-meta" id="ganttMeta"></div>
+        </header>
+        <main class="gantt-content" id="ganttContent">
+            <div class="gantt-empty" id="ganttEmpty">No analyzed results available.</div>
+            <div class="gantt-board" id="ganttBoard"></div>
+        </main>
+    </div>
+    <script src="CooldownGantt.js"></script>
+</body>
+</html>
