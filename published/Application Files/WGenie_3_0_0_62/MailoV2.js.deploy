@@ -1,0 +1,158 @@
+document.addEventListener("DOMContentLoaded", function () {
+    var storageKey = "form3-theme";
+    var root = document.documentElement;
+    var statusText = document.getElementById("statusText");
+    var previousButton = document.getElementById("previousButton");
+    var browseButton = document.getElementById("browseButton");
+    var nextButton = document.getElementById("nextButton");
+    var showPreviewButton = document.getElementById("showPreviewButton");
+    var subjectButton = document.getElementById("subjectButton");
+    var selectTemplateButton = document.getElementById("selectTemplateButton");
+    var copyLinkButton = document.getElementById("copyLinkButton");
+    var refreshButton = document.getElementById("refreshButton");
+    var bindingsButton = document.getElementById("bindingsButton");
+    var currentState = null;
+
+    applyTheme(loadInitialTheme());
+    bindEvents();
+    render();
+
+    window.addEventListener("message", function (event) {
+        if (!event || !event.data) {
+            return;
+        }
+
+        if (event.data.type === "form3-theme") {
+            applyTheme(event.data.themeName || "dark");
+            return;
+        }
+
+        if (event.data.type === "mailo-state") {
+            currentState = event.data.state || null;
+            render();
+        }
+    });
+
+    window.requestAnimationFrame(function () {
+        postToParent({
+            type: "mailo-ready"
+        });
+        postAction("request-state");
+    });
+
+    function bindEvents() {
+        browseButton.addEventListener("click", function () {
+            postAction("browse-folder");
+        });
+
+        previousButton.addEventListener("click", function () {
+            postAction("previous-template");
+        });
+
+        nextButton.addEventListener("click", function () {
+            postAction("next-template");
+        });
+
+        showPreviewButton.addEventListener("click", function () {
+            tracePreview("bindEvents", {
+                step: "showPreviewButton-click"
+            });
+            postAction("show-preview");
+        });
+
+        subjectButton.addEventListener("click", function () {
+            postAction("select-subject-file");
+        });
+
+        selectTemplateButton.addEventListener("click", function () {
+            postAction("primary-action");
+        });
+
+        copyLinkButton.addEventListener("click", function () {
+            postAction("copy-link");
+        });
+
+        refreshButton.addEventListener("click", function () {
+            postAction("refresh-preview");
+        });
+
+        bindingsButton.addEventListener("click", function () {
+            postAction("update-bindings");
+        });
+    }
+
+    function render() {
+        var state = currentState || {};
+        statusText.textContent = getText(state.StatusText, "Please select a folder with templates");
+        selectTemplateButton.textContent = getText(state.PrimaryActionLabel, "Select Template");
+    }
+
+    function postAction(action) {
+        if (action === "show-preview") {
+            tracePreview("postAction", {
+                action: action
+            });
+        }
+
+        postToParent({
+            type: "mailo-action",
+            action: action
+        });
+    }
+
+    function postToParent(message) {
+        if (!window.parent || window.parent === window) {
+            return;
+        }
+
+        window.parent.postMessage(message, "*");
+    }
+
+    function loadInitialTheme() {
+        try {
+            return window.localStorage.getItem(storageKey) === "light" ? "light" : "dark";
+        } catch (error) {
+            return "dark";
+        }
+    }
+
+    function applyTheme(themeName) {
+        root.setAttribute("data-theme", themeName === "light" ? "light" : "dark");
+    }
+
+    function getText(value, fallback) {
+        return typeof value === "string" && value.length > 0 ? value : fallback;
+    }
+
+    function tracePreview(methodName, details) {
+        var parts = ["[MailoV2][JS]", methodName];
+        var keys = Object.keys(details || {});
+
+        keys.forEach(function (key) {
+            parts.push(key + "=" + formatTraceValue(details[key]));
+        });
+
+        var message = parts.join(" ");
+        console.log(message);
+        postToParent({
+            type: "mailo-preview-trace",
+            message: message
+        });
+    }
+
+    function formatTraceValue(value) {
+        if (value === null) {
+            return "null";
+        }
+
+        if (value === undefined) {
+            return "undefined";
+        }
+
+        if (typeof value === "string") {
+            return "\"" + value.replace(/"/g, "'") + "\"";
+        }
+
+        return String(value);
+    }
+});
