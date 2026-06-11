@@ -1,0 +1,170 @@
+@font-face {
+    font-family: "DIN 2014";
+    src: local("DIN 2014"), local("DIN2014"), local("DIN 2014 Regular");
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "DIN 2014";
+    src: local("DIN 2014"), local("DIN2014"), local("DIN 2014 Bold"), local("DIN 2014 Demi");
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+}
+
+:root,
+[data-theme="dark"],
+[data-theme="light"] {
+    --mailo-font-family: "DIN 2014", "Bahnschrift", "DIN Alternate", "Segoe UI", sans-serif;
+    --mailo-surface-page: var(--color-bg-card);
+    --mailo-surface-panel: var(--color-bg-panel);
+    --mailo-surface-card: var(--color-bg-card);
+    --mailo-surface-elevated: var(--color-bg-elevated);
+    --mailo-surface-input: var(--color-bg-input);
+    --mailo-surface-button: var(--color-button-secondary-bg);
+    --mailo-surface-button-active: var(--color-button-primary-bg);
+    --mailo-surface-button-hover-start: var(--color-primary);
+    --mailo-surface-button-hover-end: var(--color-primary-hover);
+    --mailo-text-main: var(--color-text-main);
+    --mailo-text-secondary: var(--color-text-secondary);
+    --mailo-text-muted: var(--color-text-muted);
+    --mailo-text-on-accent: var(--color-button-primary-text);
+    --mailo-border: var(--color-border);
+    --mailo-border-subtle: var(--color-border-subtle);
+    --mailo-border-strong: var(--color-border-strong);
+    --mailo-divider: var(--color-divider);
+    --mailo-shadow: 0 10px 24px var(--color-shadow);
+}
+
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+    border-radius: 0;
+}
+
+html,
+body {
+    height: 100%;
+    margin: 0;
+    background: var(--mailo-surface-page);
+    color: var(--mailo-text-main);
+    font-family: var(--mailo-font-family);
+}
+
+body {
+    overflow: hidden;
+}
+
+button,
+input,
+textarea {
+    font: inherit;
+}
+
+.mailo-shell {
+    display: grid;
+    align-content: start;
+    grid-auto-rows: min-content;
+    gap: 16px;
+    height: 100%;
+    padding: 18px;
+    background: var(--mailo-surface-page);
+}
+
+.mailo-status,
+.mailo-button {
+    border: 1px solid var(--mailo-border);
+    box-shadow: var(--mailo-shadow);
+}
+
+.mailo-status {
+    min-height: 52px;
+    display: flex;
+    align-items: center;
+    padding: 10px 16px;
+    background: var(--mailo-surface-panel);
+}
+
+.mailo-status-text {
+    width: 100%;
+    white-space: pre-line;
+    text-align: center;
+    font-size: clamp(1rem, 1.25vw, 1.2rem);
+    font-weight: 700;
+    color: var(--color-primary);
+}
+
+.mailo-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+}
+
+.mailo-row-three {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.mailo-row-four {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.mailo-row-actions {
+    grid-template-columns: minmax(0, 1fr) 160px 180px;
+}
+
+.mailo-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 58px;
+    padding: 12px 18px;
+    background: var(--mailo-surface-button);
+    color: var(--mailo-text-main);
+    border: 1px solid var(--mailo-border);
+    font-size: 1rem;
+    font-weight: 700;
+    line-height: 1;
+    text-align: center;
+    cursor: pointer;
+    transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease, box-shadow 120ms ease;
+}
+
+.mailo-button:hover,
+.mailo-button:focus-visible {
+    background: linear-gradient(90deg, var(--mailo-surface-button-hover-start), var(--mailo-surface-button-hover-end));
+    border: 2px solid var(--mailo-border-strong);
+    color: var(--mailo-text-on-accent);
+    outline: none;
+}
+
+.mailo-button:disabled {
+    background: var(--mailo-surface-elevated);
+    color: var(--mailo-text-muted);
+    border-color: var(--mailo-border-subtle);
+    box-shadow: none;
+    cursor: default;
+}
+
+.mailo-button-primary {
+    background: var(--mailo-surface-button-active);
+    color: var(--mailo-text-on-accent);
+    border: 2px solid var(--mailo-border-strong);
+}
+
+@media (max-width: 980px) {
+    .mailo-shell {
+        gap: 14px;
+        padding: 14px;
+    }
+}
+
+@media (max-width: 760px) {
+    .mailo-row-three,
+    .mailo-row-four,
+    .mailo-row-actions {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}

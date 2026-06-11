@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MailoV2</title>
+    <link rel="stylesheet" href="theme.css">
+    <link rel="stylesheet" href="MailoV2.css">
+</head>
+<body>
+    <div class="mailo-shell">
+        <section class="mailo-status" aria-live="polite">
+            <div class="mailo-status-text" id="statusText">Please select a folder with templates</div>
+        </section>
+
+        <section class="mailo-row mailo-row-four" aria-label="Template navigation">
+            <button class="mailo-button" id="previousButton" type="button">Previous</button>
+            <button class="mailo-button" id="browseButton" type="button">Browse Templates</button>
+            <button class="mailo-button" id="nextButton" type="button">Next</button>
+            <button class="mailo-button" id="showPreviewButton" type="button">Show preview</button>
+        </section>
+
+        <section class="mailo-row" aria-label="Subject file selection">
+            <button class="mailo-button" id="subjectButton" type="button">Select Subject File</button>
+        </section>
+
+        <section class="mailo-row mailo-row-actions" aria-label="Mail actions">
+            <button class="mailo-button mailo-button-primary" id="selectTemplateButton" type="button">Select Template</button>
+            <button class="mailo-button" id="copyLinkButton" type="button">Copy Link</button>
+            <button class="mailo-button" id="refreshButton" type="button">Refresh Preview</button>
+        </section>
+
+        <section class="mailo-row" aria-label="Bindings">
+            <button class="mailo-button" id="bindingsButton" type="button">Update Bindings</button>
+        </section>
+    </div>
+
+    <script src="MailoV2.js"></script>
+</body>
+</html>
