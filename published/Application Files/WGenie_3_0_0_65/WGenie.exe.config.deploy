@@ -5,9 +5,19 @@
             <section name="WGenie.Properties.Settings" type="System.Configuration.ClientSettingsSection, System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089" allowExeDefinition="MachineToLocalUser" requirePermission="false" />
         </sectionGroup>
     </configSections>
-    <startup> 
+    <startup>
         <supportedRuntime version="v4.0" sku=".NETFramework,Version=v4.7.2" />
     </startup>
+    <!--
+        Per-Monitor V2 DPI awareness. Required so the native WebView2 workspace
+        overlays (browser, WGC, WGNC, CopyCat, login) stay aligned with the
+        WebView2-rendered shell on displays whose scaling differs from the
+        primary monitor. WebView2 is always per-monitor aware internally, so a
+        DPI-unaware host mispositions those overlays on high-DPI screens.
+    -->
+    <System.Windows.Forms.ApplicationConfigurationSection>
+        <add key="DpiAwareness" value="PerMonitorV2" />
+    </System.Windows.Forms.ApplicationConfigurationSection>
   <runtime>
     <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
       <dependentAssembly>

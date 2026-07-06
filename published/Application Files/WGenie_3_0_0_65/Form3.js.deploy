@@ -3566,7 +3566,10 @@ document.addEventListener("DOMContentLoaded", function () {
             left: Math.round(outerRect.left),
             top: Math.round(outerRect.top),
             width: Math.round(outerRect.width),
-            height: Math.round(outerRect.height)
+            height: Math.round(outerRect.height),
+            devicePixelRatio: window.devicePixelRatio || 1,
+            viewportWidth: viewportMetrics.width,
+            viewportHeight: viewportMetrics.height
         };
         var toolbarBounds = {
             left: Math.round(toolbarRect.left),

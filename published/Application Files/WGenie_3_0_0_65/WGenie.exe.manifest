@@ -254,7 +254,7 @@
           <dsig:Transform Algorithm="urn:schemas-microsoft-com:HashTransforms.Identity" />
         </dsig:Transforms>
         <dsig:DigestMethod Algorithm="http://www.w3.org/2000/09/xmldsig#sha256" />
-        <dsig:DigestValue>9ViQKV6osaacxYV3d0VhtDK4H5SAm+lreR/xOmwVnDs=</dsig:DigestValue>
+        <dsig:DigestValue>Bks0JwlEOV6GbLNnfGDVB6Q8U+/uaYzopI82RwkHoj8=</dsig:DigestValue>
       </hash>
     </dependentAssembly>
   </dependency>
@@ -315,13 +315,13 @@
       <dsig:DigestValue>u0sHNPYe11A4nIgjQENmBY08Kl4GkbzV7+8PsUoeVxI=</dsig:DigestValue>
     </hash>
   </file>
-  <file name="Form3.js" size="270714">
+  <file name="Form3.js" size="270876">
     <hash>
       <dsig:Transforms>
         <dsig:Transform Algorithm="urn:schemas-microsoft-com:HashTransforms.Identity" />
       </dsig:Transforms>
       <dsig:DigestMethod Algorithm="http://www.w3.org/2000/09/xmldsig#sha256" />
-      <dsig:DigestValue>tjjCgXUn0juz2fYnXoSseJkowNAE/130UxmnEIpzYFE=</dsig:DigestValue>
+      <dsig:DigestValue>YUA7umATPc9p+1k2WpF8rtpUD/i4YEmX9C0Li0+5m7c=</dsig:DigestValue>
     </hash>
   </file>
   <file name="Icon big.ico" size="135320">
@@ -405,13 +405,13 @@
       <dsig:DigestValue>NWONKSts4dSiCsp64D/NJh+Wj8mp+z39QA3Mtfmj7xw=</dsig:DigestValue>
     </hash>
   </file>
-  <file name="WGenie.exe.config" size="2233">
+  <file name="WGenie.exe.config" size="2818">
     <hash>
       <dsig:Transforms>
         <dsig:Transform Algorithm="urn:schemas-microsoft-com:HashTransforms.Identity" />
       </dsig:Transforms>
       <dsig:DigestMethod Algorithm="http://www.w3.org/2000/09/xmldsig#sha256" />
-      <dsig:DigestValue>+ms/+lXAGAPmmej5TTOsarnrHQX9erRCIyf9wzPQpYk=</dsig:DigestValue>
+      <dsig:DigestValue>J7ft/WesifRLDZrIRM1c5hh2O3HxNz8xegtpFI8GAjs=</dsig:DigestValue>
     </hash>
   </file>
   <file name="wgenie_fem_tr.ico" size="2878">
