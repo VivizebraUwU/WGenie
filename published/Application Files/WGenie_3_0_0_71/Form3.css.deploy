@@ -1759,7 +1759,7 @@ textarea {
 
 .cooldown-simulator-result-details .cooldown-simulator-validation-table-grid {
     width: max-content;
-    min-width: 1560px;
+    min-width: 1760px;
     table-layout: auto;
 }
 
@@ -1810,11 +1810,20 @@ textarea {
     min-width: 150px;
 }
 
+/* Columns 7 and 8 hold the Start/End date editors, so they need room for the input plus its
+   info button. Column 10 is the Accept action. */
 .cooldown-simulator-validation-table-grid th:nth-child(7),
 .cooldown-simulator-validation-table-grid td:nth-child(7),
 .cooldown-simulator-validation-table-grid th:nth-child(8),
 .cooldown-simulator-validation-table-grid td:nth-child(8) {
-    min-width: 170px;
+    min-width: 196px;
+    white-space: normal;
+}
+
+.cooldown-simulator-validation-table-grid th:nth-child(10),
+.cooldown-simulator-validation-table-grid td:nth-child(10) {
+    min-width: 130px;
+    white-space: normal;
 }
 
 .cooldown-simulator-optimization-table th:nth-child(2),

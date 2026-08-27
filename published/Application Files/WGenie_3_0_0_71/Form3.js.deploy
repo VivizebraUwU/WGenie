@@ -6125,9 +6125,110 @@ document.addEventListener("DOMContentLoaded", function () {
             return;
         }
 
+        // Every state push rebuilds the workspace from scratch, which destroys the input the user is
+        // typing in and drops the scroll position. Capture both first, restore them afterwards.
+        var editState = captureCooldownSimulatorEditState();
         var panels = workspaceHost.querySelectorAll(".workspace-panel");
         panels.forEach(function (panel) {
             updateCooldownSimulatorWorkspacePanel(panel);
+        });
+        restoreCooldownSimulatorEditState(editState);
+    }
+
+    function captureCooldownSimulatorEditState() {
+        var state = { scrolls: [], focus: null };
+        if (!workspaceHost) {
+            return state;
+        }
+
+        workspaceHost.querySelectorAll(".workspace-cooldown-simulator").forEach(function (container) {
+            state.scrolls.push({
+                container: container,
+                top: container.scrollTop,
+                left: container.scrollLeft
+            });
+        });
+
+        var active = document.activeElement;
+        if (!active || !active.getAttribute || !active.getAttribute("data-cooldown-date-field")) {
+            return state;
+        }
+
+        state.focus = {
+            scope: active.getAttribute("data-cooldown-date-scope") || "",
+            sourceRow: active.getAttribute("data-cooldown-source-row") || "",
+            field: active.getAttribute("data-cooldown-date-field") || "",
+            // Keep what the user actually typed; the pushed state may be a step behind it.
+            value: String(active.value || ""),
+            selectionStart: active.selectionStart,
+            selectionEnd: active.selectionEnd
+        };
+
+        var scrollParent = active.closest(".cooldown-simulator-result-details");
+        if (scrollParent) {
+            state.focus.detailsScrollLeft = scrollParent.scrollLeft;
+            state.focus.detailsScrollTop = scrollParent.scrollTop;
+        }
+
+        return state;
+    }
+
+    function restoreCooldownSimulatorEditState(state) {
+        if (!state) {
+            return;
+        }
+
+        state.scrolls.forEach(function (entry) {
+            if (entry.container && entry.container.isConnected) {
+                entry.container.scrollTop = entry.top;
+                entry.container.scrollLeft = entry.left;
+            }
+        });
+
+        var focus = state.focus;
+        if (!focus || !workspaceHost) {
+            return;
+        }
+
+        var selector = "input[data-cooldown-date-scope='" + focus.scope +
+            "'][data-cooldown-source-row='" + focus.sourceRow +
+            "'][data-cooldown-date-field='" + focus.field + "']";
+        var input = workspaceHost.querySelector(selector);
+        if (!input) {
+            return;
+        }
+
+        // The user's in-progress text wins over the value that came back from C#.
+        if (focus.value !== input.value) {
+            input.value = focus.value;
+        }
+
+        var detailsParent = input.closest(".cooldown-simulator-result-details");
+        if (detailsParent && typeof focus.detailsScrollLeft === "number") {
+            detailsParent.scrollLeft = focus.detailsScrollLeft;
+            detailsParent.scrollTop = focus.detailsScrollTop;
+        }
+
+        try {
+            input.focus({ preventScroll: true });
+        } catch (error) {
+            input.focus();
+        }
+
+        if (typeof focus.selectionStart === "number" && typeof focus.selectionEnd === "number") {
+            try {
+                input.setSelectionRange(focus.selectionStart, focus.selectionEnd);
+            } catch (error) {
+                // Some input types reject selection ranges; focus alone is enough.
+            }
+        }
+
+        // Focusing can nudge the outer container, so re-apply the captured scroll last.
+        state.scrolls.forEach(function (entry) {
+            if (entry.container && entry.container.isConnected) {
+                entry.container.scrollTop = entry.top;
+                entry.container.scrollLeft = entry.left;
+            }
         });
     }
 
@@ -6185,6 +6286,10 @@ document.addEventListener("DOMContentLoaded", function () {
             ? currentCooldownSimulatorState.autoExcludedPrmMissingAudienceCount
             : 0;
         var hasBlockingImportIssues = !!(currentCooldownSimulatorState && currentCooldownSimulatorState.hasBlockingImportIssues);
+        var acceptableWarningRowCount = currentCooldownSimulatorState &&
+            typeof currentCooldownSimulatorState.acceptableWarningRowCount === "number"
+            ? currentCooldownSimulatorState.acceptableWarningRowCount
+            : 0;
         var invalidRows = currentCooldownSimulatorState && Array.isArray(currentCooldownSimulatorState.invalidRows)
             ? currentCooldownSimulatorState.invalidRows
             : [];
@@ -6261,7 +6366,8 @@ document.addEventListener("DOMContentLoaded", function () {
             validationIssueCount,
             autoExcludedPrmMissingAudienceCount,
             validationRows,
-            hasBlockingImportIssues);
+            hasBlockingImportIssues,
+            acceptableWarningRowCount);
         renderCooldownSimulatorOptimizationSummary(optimizationSummaryContainer, optimizationSummary);
         resultsContainer.innerHTML = "";
 
@@ -6660,10 +6766,10 @@ document.addEventListener("DOMContentLoaded", function () {
                     appendCooldownSimulatorImportantLaunchCell(row, item, isEditableRow);
                     break;
                 case "start-date":
-                    appendCooldownSimulatorDateEditorCell(row, item, "start");
+                    appendCooldownSimulatorDateEditorCell(row, item, "start", "analysis");
                     break;
                 case "end-date":
-                    appendCooldownSimulatorDateEditorCell(row, item, "end");
+                    appendCooldownSimulatorDateEditorCell(row, item, "end", "analysis");
                     break;
                 case "status":
                     appendCooldownSimulatorStatusCell(row, item);
@@ -7252,16 +7358,18 @@ document.addEventListener("DOMContentLoaded", function () {
         row.appendChild(cell);
     }
 
-    function appendCooldownSimulatorDateEditorCell(row, item, fieldName) {
+    function appendCooldownSimulatorDateEditorCell(row, item, fieldName, scopeName) {
         var cell = document.createElement("td");
         var container = document.createElement("div");
         var inputRow = document.createElement("div");
         var input = document.createElement("input");
         var error = document.createElement("div");
         var sourceRowIndex = getCooldownSimulatorItemSourceRowIndex(item);
+        // Analysis items carry plannedDate/endDate; import rows carry startDate/endDate. The same
+        // editor is used in both the analysis table and the import-issues table.
         var value = fieldName === "end"
             ? String(item && (item.endDate || item.EndDate || "") || "")
-            : String(item && (item.plannedDate || item.PlannedDate || "") || "");
+            : String(item && (item.plannedDate || item.PlannedDate || item.startDate || item.StartDate || "") || "");
         var errorKey = buildCooldownSimulatorDateEditKey(sourceRowIndex, fieldName);
         var existingError = cooldownSimulatorDateEditErrors[errorKey] || "";
         var suggestionText = getCooldownSimulatorDateFixSuggestionText(item, fieldName);
@@ -7305,6 +7413,10 @@ document.addEventListener("DOMContentLoaded", function () {
             ? "rgba(255, 176, 32, 0.10)"
             : "rgba(255, 255, 255, 0.04)";
         input.style.color = "#EAF2FF";
+        // Identity that survives a full re-render, so focus, caret and text can be restored.
+        input.setAttribute("data-cooldown-date-scope", scopeName || "analysis");
+        input.setAttribute("data-cooldown-source-row", String(sourceRowIndex));
+        input.setAttribute("data-cooldown-date-field", fieldName);
 
         error.style.fontSize = "11px";
         error.style.lineHeight = "1.35";
@@ -7418,6 +7530,13 @@ document.addEventListener("DOMContentLoaded", function () {
         cancelCooldownSimulatorDateEditDebounce(sourceRowIndex, fieldName);
         cooldownSimulatorDateEditTimers[timerKey] = window.setTimeout(function () {
             delete cooldownSimulatorDateEditTimers[timerKey];
+            // Never commit while the field still has focus. A partial-but-parseable value such as
+            // "2026-10-01" typed on the way to "2026-10-01 09:00" would otherwise post, trigger a
+            // state push, and rebuild the table underneath the caret. Blur and Enter commit instead.
+            if (document.activeElement === input) {
+                return;
+            }
+
             commitCooldownSimulatorDateEdit(input, errorElement, item, fieldName);
             if (typeof onCommitted === "function") {
                 onCommitted();
@@ -7487,9 +7606,86 @@ document.addEventListener("DOMContentLoaded", function () {
             return fallbackDate;
         }
 
+        // Numeric day-first, e.g. 18/10/26, 18.10.2026, 18-10-26, with an optional time.
+        // Day-first on purpose: the source exports are day-first, and V8's own Date parser would
+        // read 18/10/26 as month 18 and reject it.
+        var numericMatch = normalizedValue.match(
+            /^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2}|\d{4})(?:[ T](\d{1,2}):(\d{2}))?$/);
+        if (numericMatch) {
+            return buildCooldownSimulatorEditableDate(
+                normalizeCooldownSimulatorTwoDigitYear(numericMatch[3]),
+                parseInt(numericMatch[2], 10) - 1,
+                parseInt(numericMatch[1], 10),
+                numericMatch[4],
+                numericMatch[5]);
+        }
+
+        // Month name, e.g. the 18/Oct/26 shape used by the Jira exports.
+        var monthNameMatch = normalizedValue.match(
+            /^(\d{1,2})[\/.\-]([A-Za-z]{3,})[\/.\-](\d{2}|\d{4})(?:[ T](\d{1,2}):(\d{2}))?$/);
+        if (monthNameMatch) {
+            var monthIndex = getCooldownSimulatorMonthIndex(monthNameMatch[2]);
+            if (monthIndex < 0) {
+                return null;
+            }
+
+            return buildCooldownSimulatorEditableDate(
+                normalizeCooldownSimulatorTwoDigitYear(monthNameMatch[3]),
+                monthIndex,
+                parseInt(monthNameMatch[1], 10),
+                monthNameMatch[4],
+                monthNameMatch[5]);
+        }
+
         var normalizedIsoValue = normalizedValue.replace(" ", "T");
         var parsedDate = new Date(normalizedIsoValue);
         return isNaN(parsedDate.getTime()) ? null : parsedDate;
+    }
+
+    // Mirrors .NET's invariant TwoDigitYearMax, measured as 2049 on the target framework, so JS and
+    // C# resolve a 2-digit year identically: 00-49 is 2000-2049, 50-99 is 1950-1999. Keep this pivot
+    // in step with CooldownSimulatorEditableDateCatalog or the two layers will disagree.
+    var COOLDOWN_SIMULATOR_TWO_DIGIT_YEAR_MAX = 2049;
+
+    function normalizeCooldownSimulatorTwoDigitYear(yearText) {
+        var year = parseInt(yearText, 10);
+        if (String(yearText).length === 4) {
+            return year;
+        }
+
+        var century = Math.floor(COOLDOWN_SIMULATOR_TWO_DIGIT_YEAR_MAX / 100) * 100;
+        var candidate = century + year;
+        return candidate <= COOLDOWN_SIMULATOR_TWO_DIGIT_YEAR_MAX ? candidate : candidate - 100;
+    }
+
+    function getCooldownSimulatorMonthIndex(monthName) {
+        var normalized = String(monthName || "").trim().toLowerCase().slice(0, 3);
+        var months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+        for (var index = 0; index < months.length; index++) {
+            if (months[index] === normalized) {
+                return index;
+            }
+        }
+
+        return -1;
+    }
+
+    // Rejects impossible dates such as 31/02/26: JS would silently roll them into the next month,
+    // so every component is checked back out of the constructed date.
+    function buildCooldownSimulatorEditableDate(year, monthIndex, day, hourText, minuteText) {
+        var hour = parseInt(hourText || "0", 10);
+        var minute = parseInt(minuteText || "0", 10);
+        var candidate = new Date(year, monthIndex, day, hour, minute, 0, 0);
+        if (isNaN(candidate.getTime()) ||
+            candidate.getFullYear() !== year ||
+            candidate.getMonth() !== monthIndex ||
+            candidate.getDate() !== day ||
+            candidate.getHours() !== hour ||
+            candidate.getMinutes() !== minute) {
+            return null;
+        }
+
+        return candidate;
     }
 
     function buildCooldownSimulatorDateEditKey(sourceRowIndex, fieldName) {
@@ -7909,7 +8105,8 @@ document.addEventListener("DOMContentLoaded", function () {
         validationIssueCount,
         autoExcludedPrmMissingAudienceCount,
         invalidRows,
-        hasBlockingImportIssues) {
+        hasBlockingImportIssues,
+        acceptableWarningRowCount) {
         if (!summaryContainer || !tableContainer) {
             return;
         }
@@ -7943,10 +8140,29 @@ document.addEventListener("DOMContentLoaded", function () {
         summaryContainer.appendChild(summaryHeading);
         if (validationIssueCount) {
             summaryText.textContent = hasBlockingImportIssues
-                ? "Blocking import issues must be corrected before analysis can run."
-                : String(validationIssueCount) + " imported launch rows have validation errors or normalization warnings.";
+                ? "Some launches cannot be simulated until their Region or Audience is corrected below. " +
+                    "Warning-only launches can be edited or accepted as-is."
+                : String(validationIssueCount) +
+                    " launch row(s) have warnings. Edit the dates or audience below, or accept them as-is.";
             summaryText.style.marginTop = "6px";
             summaryContainer.appendChild(summaryText);
+        }
+
+        if (acceptableWarningRowCount > 0) {
+            var acceptAllRow = document.createElement("div");
+            var acceptAllButton = document.createElement("button");
+            acceptAllRow.style.marginTop = "10px";
+            acceptAllButton.className = "tool-button";
+            acceptAllButton.type = "button";
+            acceptAllButton.textContent = "Accept all " + String(acceptableWarningRowCount) + " warning row(s) as-is";
+            acceptAllButton.title =
+                "Clear the warnings on every launch that is not blocking. Nothing about the launches changes.";
+            acceptAllButton.addEventListener("click", function () {
+                acceptAllButton.disabled = true;
+                postCooldownSimulatorAction("acknowledge-all-launch-warnings", []);
+            });
+            acceptAllRow.appendChild(acceptAllButton);
+            summaryContainer.appendChild(acceptAllRow);
         }
 
         if (autoExcludedPrmMissingAudienceCount > 0) {
@@ -7980,7 +8196,7 @@ document.addEventListener("DOMContentLoaded", function () {
         wrapper.className = "cooldown-simulator-result-details cooldown-simulator-validation-details";
         table.className = "cooldown-simulator-validation-table-grid";
 
-        ["Issue", "Title", "Channel", "Region", "Raw Realm", "Audience", "Start Date", "End date", "Details"].forEach(function (label) {
+        ["Issue", "Title", "Channel", "Region", "Raw Realm", "Audience", "Start Date", "End date", "Details", "Action"].forEach(function (label) {
             var headerCell = document.createElement("th");
             headerCell.textContent = label;
             headRow.appendChild(headerCell);
@@ -7997,9 +8213,10 @@ document.addEventListener("DOMContentLoaded", function () {
             appendCooldownSimulatorRegionCorrectionCell(row, rowItem);
             appendCooldownSimulatorDetailCell(row, rowItem.rawRealm || "");
             appendCooldownSimulatorAudienceSelectionCell(row, rowItem, true);
-            appendCooldownSimulatorDetailCell(row, rowItem.startDate || "");
-            appendCooldownSimulatorDetailCell(row, rowItem.endDate || "");
+            appendCooldownSimulatorDateEditorCell(row, rowItem, "start", "validation");
+            appendCooldownSimulatorDateEditorCell(row, rowItem, "end", "validation");
             appendCooldownSimulatorDetailCell(row, formatCooldownSimulatorValidationDetails(rowItem));
+            appendCooldownSimulatorAcceptWarningsCell(row, rowItem);
             tbody.appendChild(row);
         });
 
@@ -8007,6 +8224,61 @@ document.addEventListener("DOMContentLoaded", function () {
         wrapper.appendChild(table);
         tableContainer.appendChild(heading);
         tableContainer.appendChild(wrapper);
+    }
+
+    function appendCooldownSimulatorAcceptWarningsCell(row, rowItem) {
+        var cell = document.createElement("td");
+        var sourceRowIndex = getCooldownSimulatorItemSourceRowIndex(rowItem);
+        var canAccept = !!(rowItem && (rowItem.canAcceptWarnings || rowItem.CanAcceptWarnings));
+        var isValid = !(rowItem && (rowItem.isValid === false || rowItem.IsValid === false));
+
+        if (sourceRowIndex < 0) {
+            cell.textContent = "—";
+            row.appendChild(cell);
+            return;
+        }
+
+        if (!isValid) {
+            // A row that cannot resolve its region or audience genuinely cannot be simulated, so
+            // there is nothing to accept: it has to be corrected above.
+            var blockedNote = document.createElement("span");
+            blockedNote.textContent = "Correct to proceed";
+            blockedNote.style.fontSize = "11px";
+            blockedNote.style.color = "#ffb3c2";
+            blockedNote.title = "Set a supported Region and Audience first. Blocking rows cannot be accepted as-is.";
+            cell.appendChild(blockedNote);
+            row.appendChild(cell);
+            return;
+        }
+
+        if (!canAccept) {
+            var acceptedNote = document.createElement("span");
+            acceptedNote.textContent = "Accepted";
+            acceptedNote.style.fontSize = "11px";
+            acceptedNote.style.color = "#a7f3d0";
+            cell.appendChild(acceptedNote);
+            row.appendChild(cell);
+            return;
+        }
+
+        var acceptButton = document.createElement("button");
+        acceptButton.className = "tool-button";
+        acceptButton.type = "button";
+        acceptButton.textContent = "Accept as-is";
+        acceptButton.title =
+            "Keep this launch exactly as it is and clear its warnings. Nothing about the launch changes.";
+        acceptButton.style.padding = "3px 8px";
+        acceptButton.style.fontSize = "11px";
+        acceptButton.style.whiteSpace = "nowrap";
+        acceptButton.addEventListener("click", function () {
+            acceptButton.disabled = true;
+            postCooldownSimulatorAction("acknowledge-launch-warnings", [], {
+                sourceRowIndex: sourceRowIndex
+            });
+        });
+
+        cell.appendChild(acceptButton);
+        row.appendChild(cell);
     }
 
     function formatCooldownSimulatorValidationDetails(rowItem) {

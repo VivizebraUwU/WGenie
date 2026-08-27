@@ -247,14 +247,14 @@
     </dependentAssembly>
   </dependency>
   <dependency>
-    <dependentAssembly dependencyType="install" allowDelayedBinding="true" codebase="WGenie.exe" size="13679616">
+    <dependentAssembly dependencyType="install" allowDelayedBinding="true" codebase="WGenie.exe" size="13683712">
       <assemblyIdentity name="WGenie" version="2.0.0.0" language="neutral" processorArchitecture="msil" />
       <hash>
         <dsig:Transforms>
           <dsig:Transform Algorithm="urn:schemas-microsoft-com:HashTransforms.Identity" />
         </dsig:Transforms>
         <dsig:DigestMethod Algorithm="http://www.w3.org/2000/09/xmldsig#sha256" />
-        <dsig:DigestValue>8dVmR72TzKMkHjYQEyYvFszFjt0JeoxnMnyNwWwGuVc=</dsig:DigestValue>
+        <dsig:DigestValue>KU85Px3WBtq7fEBsxEOIEUn7EY58EFPmlOKvUBIKpBg=</dsig:DigestValue>
       </hash>
     </dependentAssembly>
   </dependency>
@@ -297,13 +297,13 @@
       <dsig:DigestValue>qcXv/+RaoSxabj7FHAkLVzXpSocX4Et4UjrwOleoMIc=</dsig:DigestValue>
     </hash>
   </file>
-  <file name="Form3.css" size="50669">
+  <file name="Form3.css" size="51009">
     <hash>
       <dsig:Transforms>
         <dsig:Transform Algorithm="urn:schemas-microsoft-com:HashTransforms.Identity" />
       </dsig:Transforms>
       <dsig:DigestMethod Algorithm="http://www.w3.org/2000/09/xmldsig#sha256" />
-      <dsig:DigestValue>kUwQDV/YjvGHKUiSTVfIb1sgUYJwMfhPahAjF1Ruwys=</dsig:DigestValue>
+      <dsig:DigestValue>IlGyVKSevrqq6jEWZ/P7ijGOwFXSm0UyyuUZGS1Yggc=</dsig:DigestValue>
     </hash>
   </file>
   <file name="Form3.html" size="2863">
@@ -315,13 +315,13 @@
       <dsig:DigestValue>CjdRvbpS5L7izekQhvzSJkpFMvbyJ8E8V8uTI+mevM4=</dsig:DigestValue>
     </hash>
   </file>
-  <file name="Form3.js" size="372627">
+  <file name="Form3.js" size="384620">
     <hash>
       <dsig:Transforms>
         <dsig:Transform Algorithm="urn:schemas-microsoft-com:HashTransforms.Identity" />
       </dsig:Transforms>
       <dsig:DigestMethod Algorithm="http://www.w3.org/2000/09/xmldsig#sha256" />
-      <dsig:DigestValue>juLkMsnukjbndzkw607bzVNPJtI8vnhxyixb7Nu4ono=</dsig:DigestValue>
+      <dsig:DigestValue>S97iw0CN5egl3tJ436jWXj9rv471xpIjJxPPcL3YJDA=</dsig:DigestValue>
     </hash>
   </file>
   <file name="Icon big.ico" size="135320">
