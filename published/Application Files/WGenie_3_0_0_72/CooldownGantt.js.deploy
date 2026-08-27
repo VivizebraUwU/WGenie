@@ -1,0 +1,1003 @@
+(function () {
+    "use strict";
+
+    var currentData = null;
+    var ganttMeta = null;
+    var ganttFilters = null;
+    var ganttStatus = null;
+    var ganttEmpty = null;
+    var ganttBoard = null;
+    var selectedCombinationKeys = null;
+    var dragState = null;
+    var dragTooltip = null;
+    var ganttItemElementsByKey = new Map();
+    var activeBlockerHighlightElements = [];
+    var ganttDebugEnabled = false;
+    var ganttScriptVersion = "2026-05-08T16:55:00-gantt-iso-payload";
+    var laneLabelWidth = 180;
+    var minimumTrackWidth = 900;
+    var pixelsPerDay = 160;
+
+    document.addEventListener("DOMContentLoaded", function () {
+        ganttMeta = document.getElementById("ganttMeta");
+        ganttFilters = document.getElementById("ganttFilters");
+        ganttStatus = document.getElementById("ganttStatus");
+        ganttEmpty = document.getElementById("ganttEmpty");
+        ganttBoard = document.getElementById("ganttBoard");
+        ganttDebugEnabled = readDebugFlag();
+        renderGantt();
+    });
+
+    window.cooldownGanttSetData = function (data) {
+        currentData = data || null;
+        selectedCombinationKeys = null;
+        renderGantt();
+    };
+
+    window.cooldownGanttShowMessage = function (message, isError) {
+        showStatus(message, !!isError);
+    };
+
+    function renderGantt() {
+        if (!ganttMeta || !ganttFilters || !ganttEmpty || !ganttBoard) {
+            return;
+        }
+
+        ganttBoard.innerHTML = "";
+        clearBlockerHighlights();
+        ganttItemElementsByKey = new Map();
+        var lanes = currentData && Array.isArray(currentData.lanes)
+            ? currentData.lanes
+            : (currentData && Array.isArray(currentData.Lanes) ? currentData.Lanes : []);
+        var generatedAt = currentData && (currentData.generatedAt || currentData.GeneratedAt || "");
+        ganttMeta.textContent = generatedAt ? "Generated " + generatedAt : "";
+
+        var combinations = collectCombinations(lanes);
+        ensureSelectedCombinations(combinations);
+        renderFilterControls(combinations);
+
+        var filteredLanes = filterLanesBySelection(lanes);
+        var timelineItems = collectTimelineItems(filteredLanes);
+        if (!timelineItems.length) {
+            ganttEmpty.textContent = combinations.length
+                ? "No Gantt items match the selected filters."
+                : "No analyzed results available.";
+            ganttEmpty.style.display = "block";
+            ganttBoard.style.display = "none";
+            return;
+        }
+
+        ganttEmpty.style.display = "none";
+        ganttBoard.style.display = "grid";
+
+        var bounds = getTimelineBounds(timelineItems);
+        var trackWidth = Math.max(minimumTrackWidth, Math.ceil((bounds.max - bounds.min) / 86400000 * pixelsPerDay));
+        ganttBoard.style.gridTemplateColumns = laneLabelWidth + "px " + trackWidth + "px";
+        ganttBoard.appendChild(createCornerCell());
+        ganttBoard.appendChild(createAxisTrack(bounds, trackWidth));
+
+        filteredLanes.forEach(function (lane) {
+            appendLane(ganttBoard, lane, bounds, trackWidth);
+        });
+    }
+
+    function collectCombinations(lanes) {
+        var combinations = [];
+        var seen = new Set();
+        lanes.forEach(function (lane) {
+            var laneItems = getLaneItems(lane);
+            laneItems.forEach(function (item) {
+                var combination = getItemCombination(item, lane);
+                if (!combination.key || seen.has(combination.key)) {
+                    return;
+                }
+
+                seen.add(combination.key);
+                combinations.push(combination);
+            });
+        });
+
+        combinations.sort(function (left, right) {
+            return left.label.localeCompare(right.label);
+        });
+        return combinations;
+    }
+
+    function ensureSelectedCombinations(combinations) {
+        if (selectedCombinationKeys instanceof Set) {
+            return;
+        }
+
+        selectedCombinationKeys = new Set();
+        combinations.forEach(function (combination) {
+            if (combination.key) {
+                selectedCombinationKeys.add(combination.key);
+            }
+        });
+    }
+
+    function renderFilterControls(combinations) {
+        ganttFilters.innerHTML = "";
+        if (!combinations.length) {
+            ganttFilters.style.display = "none";
+            return;
+        }
+
+        ganttFilters.style.display = "block";
+
+        var header = document.createElement("div");
+        var title = document.createElement("div");
+        var actions = document.createElement("div");
+        var selectAllButton = document.createElement("button");
+        var clearAllButton = document.createElement("button");
+        var list = document.createElement("div");
+
+        header.className = "gantt-filters-header";
+        title.className = "gantt-filters-title";
+        title.textContent = "Visible combinations";
+        actions.className = "gantt-filters-actions";
+
+        selectAllButton.type = "button";
+        selectAllButton.textContent = "Select all";
+        selectAllButton.addEventListener("click", function () {
+            selectedCombinationKeys = new Set(combinations.map(function (combination) {
+                return combination.key;
+            }));
+            renderGantt();
+        });
+
+        clearAllButton.type = "button";
+        clearAllButton.textContent = "Clear all";
+        clearAllButton.addEventListener("click", function () {
+            selectedCombinationKeys = new Set();
+            renderGantt();
+        });
+
+        actions.appendChild(selectAllButton);
+        actions.appendChild(clearAllButton);
+        header.appendChild(title);
+        header.appendChild(actions);
+
+        list.className = "gantt-filter-list";
+        combinations.forEach(function (combination) {
+            var label = document.createElement("label");
+            var checkbox = document.createElement("input");
+            var text = document.createElement("span");
+
+            label.className = "gantt-filter-item";
+            checkbox.type = "checkbox";
+            checkbox.checked = selectedCombinationKeys.has(combination.key);
+            checkbox.value = combination.key;
+            checkbox.addEventListener("change", function () {
+                if (checkbox.checked) {
+                    selectedCombinationKeys.add(combination.key);
+                } else {
+                    selectedCombinationKeys.delete(combination.key);
+                }
+
+                renderGantt();
+            });
+            text.textContent = combination.label;
+            label.appendChild(checkbox);
+            label.appendChild(text);
+            list.appendChild(label);
+        });
+
+        ganttFilters.appendChild(header);
+        ganttFilters.appendChild(list);
+    }
+
+    function filterLanesBySelection(lanes) {
+        var filteredLanes = [];
+        lanes.forEach(function (lane) {
+            var filteredItems = getLaneItems(lane).filter(function (item) {
+                var combination = getItemCombination(item, lane);
+                return selectedCombinationKeys.has(combination.key);
+            });
+            if (!filteredItems.length) {
+                return;
+            }
+
+            filteredLanes.push({
+                channel: lane.channel || lane.Channel || "Unknown channel",
+                Channel: lane.channel || lane.Channel || "Unknown channel",
+                items: filteredItems,
+                Items: filteredItems
+            });
+        });
+
+        return filteredLanes;
+    }
+
+    function collectTimelineItems(lanes) {
+        var items = [];
+        lanes.forEach(function (lane) {
+            var laneItems = getLaneItems(lane);
+            laneItems.forEach(function (item) {
+        var startDateIso = getItemStartIso(item);
+        var endDateIso = getItemEndIso(item);
+        var plannedTime = parseTimelineDate(startDateIso);
+        var actualTime = getDisplayActualTime(item);
+        var endTime = parseTimelineDate(endDateIso);
+                var recommendedTime = getRecommendedEndTime(item);
+                if (isFinite(plannedTime) && isFinite(actualTime)) {
+                    items.push({
+                        plannedTime: plannedTime,
+                        actualTime: actualTime,
+                        endTime: isFinite(endTime) ? endTime : NaN,
+                        recommendedTime: isFinite(recommendedTime) ? recommendedTime : NaN
+                    });
+                }
+            });
+        });
+        return items;
+    }
+
+    function getTimelineBounds(items) {
+        var min = items[0].plannedTime;
+        var max = items[0].actualTime;
+        items.forEach(function (item) {
+            min = Math.min(min, item.plannedTime, item.actualTime);
+            max = Math.max(
+                max,
+                item.plannedTime,
+                item.actualTime,
+                isFinite(item.endTime) ? item.endTime : item.actualTime,
+                isFinite(item.recommendedTime) ? item.recommendedTime : item.actualTime);
+        });
+
+        if (min === max) {
+            max = min + 86400000;
+        }
+
+        return {
+            min: min - 43200000,
+            max: max + 43200000
+        };
+    }
+
+    function createCornerCell() {
+        var corner = document.createElement("div");
+        corner.className = "gantt-corner-cell";
+        corner.textContent = "Combination";
+        return corner;
+    }
+
+    function createAxisTrack(bounds, trackWidth) {
+        var track = document.createElement("div");
+        var firstTick = startOfDay(bounds.min);
+
+        track.className = "gantt-axis-track";
+        track.style.width = trackWidth + "px";
+
+        for (var tick = firstTick; tick <= bounds.max + 86400000; tick += 86400000) {
+            var left = getTimelinePosition(tick, bounds, trackWidth);
+            var tickLine = document.createElement("div");
+            var tickLabel = document.createElement("div");
+
+            tickLine.className = "gantt-axis-tick";
+            tickLine.style.left = left + "px";
+
+            tickLabel.className = "gantt-axis-label";
+            tickLabel.style.left = left + "px";
+            tickLabel.textContent = formatAxisDate(tick);
+
+            track.appendChild(tickLine);
+            track.appendChild(tickLabel);
+        }
+
+        return track;
+    }
+
+    function appendLane(board, lane, bounds, trackWidth) {
+        var label = document.createElement("div");
+        var track = document.createElement("div");
+        var laneItems = getLaneItems(lane);
+        var firstTick = startOfDay(bounds.min);
+
+        label.className = "gantt-lane-label";
+        label.textContent = lane.channel || lane.Channel || "Unknown channel";
+
+        track.className = "gantt-lane-track";
+        track.style.width = trackWidth + "px";
+
+        for (var tick = firstTick; tick <= bounds.max + 86400000; tick += 86400000) {
+            var gridline = document.createElement("div");
+            gridline.className = "gantt-lane-gridline";
+            gridline.style.left = getTimelinePosition(tick, bounds, trackWidth) + "px";
+            track.appendChild(gridline);
+        }
+
+        laneItems.forEach(function (item) {
+        var startDateIso = getItemStartIso(item);
+        var endDateIso = getItemEndIso(item);
+        var plannedTime = parseTimelineDate(startDateIso);
+        var actualTime = getDisplayActualTime(item);
+        var endTime = parseTimelineDate(endDateIso);
+            if (!isFinite(plannedTime) || !isFinite(actualTime)) {
+                return;
+            }
+
+            track.appendChild(createTimelineItem(item, lane, plannedTime, actualTime, endTime, bounds, trackWidth));
+        });
+
+        board.appendChild(label);
+        board.appendChild(track);
+    }
+
+    function createTimelineItem(item, lane, plannedTime, actualTime, endTime, bounds, trackWidth) {
+        var itemElement = document.createElement("div");
+        var label = document.createElement("div");
+        var windowBar = document.createElement("div");
+        var plannedMarker = document.createElement("div");
+        var actualMarker = document.createElement("div");
+        var plannedLeft = getTimelinePosition(plannedTime, bounds, trackWidth);
+        var actualLeft = getTimelinePosition(actualTime, bounds, trackWidth);
+        var hasWindow = isFinite(endTime) && endTime >= plannedTime;
+        var endLeft = hasWindow ? getTimelinePosition(endTime, bounds, trackWidth) : plannedLeft;
+        var status = item.status || item.Status || "";
+        var normalizedStatus = getNormalizedStatus(status);
+        var isDelayed = !!(item.isDelayed || item.IsDelayed || normalizedStatus === "delayed");
+        var isExpired = !!(item.isExpired || item.IsExpired || normalizedStatus === "expired");
+        var title = item.title || item.Title || "Untitled";
+        var displayStartDate = item.plannedDate || item.PlannedDate || "";
+        var displayEndDate = item.endDate || item.EndDate || "";
+        var delayDisplay = item.delayDisplay || item.DelayDisplay || "";
+        var recommendedTime = getRecommendedEndTime(item);
+        var recommendedDisplay = item.recommendedEndDateDisplay || item.RecommendedEndDateDisplay || "";
+        var dateFixSuggestion = item.dateFixSuggestionText || item.DateFixSuggestionText || "";
+        var missingRecommendationText = "No stable recommended End Date found.";
+
+        itemElement.className = "gantt-item";
+        registerGanttItemElement(getItemLookupKeys(item, lane), itemElement);
+        if (isExpired) {
+            itemElement.classList.add("is-expired");
+        } else if (isDelayed) {
+            itemElement.classList.add("is-delayed");
+        }
+        if (hasWindow) {
+            itemElement.classList.add("has-window");
+        }
+
+        label.className = "gantt-item-label";
+        label.style.left = Math.max(0, Math.min(trackWidth - 230, Math.max(actualLeft, endLeft) + 10)) + "px";
+        label.textContent = title;
+
+        if (hasWindow) {
+            windowBar.className = "gantt-item-window";
+            windowBar.style.left = plannedLeft + "px";
+            windowBar.style.width = Math.max(6, endLeft - plannedLeft) + "px";
+            windowBar.title = "Window: " +
+                displayStartDate +
+                " - " +
+                displayEndDate +
+                (delayDisplay ? "\nDelay: " + delayDisplay : "") +
+                (isExpired && !isFinite(recommendedTime) ? "\n" + (dateFixSuggestion || missingRecommendationText) : "");
+            appendDateHandles(windowBar, item, lane, plannedTime, endTime, bounds, trackWidth, itemElement);
+            itemElement.appendChild(windowBar);
+        }
+
+        plannedMarker.className = "gantt-item-planned";
+        plannedMarker.style.left = plannedLeft + "px";
+        plannedMarker.title = "Planned: " + displayStartDate;
+
+        actualMarker.className = "gantt-item-actual";
+        actualMarker.style.left = actualLeft + "px";
+        actualMarker.title = ((item.actualDate || item.ActualDate || "") ? "Actual: " : "Timeline point: ") +
+            (item.actualDate || item.ActualDate || item.endDate || item.EndDate || "") +
+            (delayDisplay ? "\nDelay: " + delayDisplay : "");
+        if (isExpired && !isFinite(recommendedTime)) {
+            actualMarker.title += "\n" + (dateFixSuggestion || missingRecommendationText);
+            label.title = dateFixSuggestion || missingRecommendationText;
+        }
+
+        if (actualLeft !== plannedLeft) {
+            var connector = document.createElement("div");
+            connector.className = "gantt-item-line";
+            connector.style.left = Math.min(plannedLeft, actualLeft) + "px";
+            connector.style.width = Math.max(2, Math.abs(actualLeft - plannedLeft)) + "px";
+            itemElement.appendChild(connector);
+        }
+
+        itemElement.appendChild(label);
+        itemElement.appendChild(plannedMarker);
+        itemElement.appendChild(actualMarker);
+
+        if (isExpired && isFinite(recommendedTime)) {
+            itemElement.appendChild(createRecommendedEndMarker(
+                recommendedTime,
+                bounds,
+                trackWidth,
+                recommendedDisplay,
+                dateFixSuggestion));
+        }
+
+        if (isDelayed || isExpired) {
+            itemElement.addEventListener("mouseenter", function () {
+                highlightKnownBlockers(itemElement, item);
+            });
+            itemElement.addEventListener("mouseleave", clearBlockerHighlights);
+        }
+
+        return itemElement;
+    }
+
+    function registerGanttItemElement(keys, element) {
+        element.setAttribute("data-gantt-keys", keys.join(","));
+        keys.forEach(function (key) {
+            if (!key) {
+                return;
+            }
+
+            element.setAttribute("data-gantt-key", key);
+            if (!ganttItemElementsByKey.has(key)) {
+                ganttItemElementsByKey.set(key, []);
+            }
+
+            ganttItemElementsByKey.get(key).push(element);
+        });
+    }
+
+    function highlightKnownBlockers(hoveredElement, item) {
+        clearBlockerHighlights();
+        var blockerKeys = getStringArray(item.blockerLookupKeys || item.BlockerLookupKeys);
+        var hoveredKeys = getStringArray((hoveredElement.getAttribute("data-gantt-keys") || "").split(","));
+        if (!blockerKeys.length) {
+            debugGantt("blocker-hover", {
+                hoveredKeys: hoveredKeys,
+                blockerKeys: blockerKeys,
+                matchedBlockers: 0
+            });
+            return;
+        }
+
+        hoveredElement.classList.add("gantt-hover-source");
+        activeBlockerHighlightElements.push(hoveredElement);
+        var matchedBlockerCount = 0;
+        blockerKeys.forEach(function (key) {
+            var matchingElements = ganttItemElementsByKey.get(key);
+            if (!matchingElements || !matchingElements.length) {
+                return;
+            }
+
+            matchingElements.forEach(function (element) {
+                if (element === hoveredElement) {
+                    return;
+                }
+
+                element.classList.add("gantt-blocker-highlight");
+                activeBlockerHighlightElements.push(element);
+                matchedBlockerCount += 1;
+            });
+        });
+        debugGantt("blocker-hover", {
+            hoveredKeys: hoveredKeys,
+            blockerKeys: blockerKeys,
+            matchedBlockers: matchedBlockerCount
+        });
+    }
+
+    function clearBlockerHighlights() {
+        activeBlockerHighlightElements.forEach(function (element) {
+            element.classList.remove("gantt-hover-source");
+            element.classList.remove("gantt-blocker-highlight");
+        });
+        activeBlockerHighlightElements = [];
+    }
+
+    function appendDateHandles(windowBar, item, lane, plannedTime, endTime, bounds, trackWidth, itemElement) {
+        var sourceRowIndex = readNumber(item.sourceRowIndex, item.SourceRowIndex);
+        if (!isFinite(sourceRowIndex) || sourceRowIndex < 0 || !isFinite(endTime)) {
+            return;
+        }
+
+        var startHandle = document.createElement("button");
+        var endHandle = document.createElement("button");
+        startHandle.type = "button";
+        endHandle.type = "button";
+        startHandle.className = "gantt-date-handle gantt-date-handle-start";
+        endHandle.className = "gantt-date-handle gantt-date-handle-end";
+        startHandle.title = "Drag to update Start Date";
+        endHandle.title = "Drag to update End Date";
+        startHandle.setAttribute("aria-label", "Drag to update Start Date");
+        endHandle.setAttribute("aria-label", "Drag to update End Date");
+
+        startHandle.addEventListener("pointerdown", function (event) {
+            beginDateDrag(event, "start", item, lane, plannedTime, endTime, bounds, trackWidth, itemElement, windowBar);
+        });
+        endHandle.addEventListener("pointerdown", function (event) {
+            beginDateDrag(event, "end", item, lane, plannedTime, endTime, bounds, trackWidth, itemElement, windowBar);
+        });
+
+        windowBar.appendChild(startHandle);
+        windowBar.appendChild(endHandle);
+    }
+
+    function createRecommendedEndMarker(recommendedTime, bounds, trackWidth, recommendedDisplay, dateFixSuggestion) {
+        var marker = document.createElement("div");
+        var flag = document.createElement("div");
+        var display = recommendedDisplay || formatAxisDate(recommendedTime);
+        marker.className = "gantt-recommended-end-marker";
+        marker.style.left = getTimelinePosition(recommendedTime, bounds, trackWidth) + "px";
+        marker.title = "Recommended End Date: " + display +
+            ". Extending to this date should avoid expiration." +
+            (dateFixSuggestion ? "\n" + dateFixSuggestion : "");
+
+        flag.className = "gantt-recommended-end-flag";
+        marker.appendChild(flag);
+        return marker;
+    }
+
+    function beginDateDrag(event, handleType, item, lane, plannedTime, endTime, bounds, trackWidth, itemElement, windowBar) {
+        if (!isFinite(plannedTime) || !isFinite(endTime)) {
+            return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        dragState = {
+            handleType: handleType,
+            item: item,
+            lane: lane,
+            bounds: bounds,
+            trackWidth: trackWidth,
+            itemElement: itemElement,
+            windowBar: windowBar,
+            pointerStartX: event.clientX,
+            originalStartTime: plannedTime,
+            originalEndTime: endTime,
+            currentStartTime: plannedTime,
+            currentEndTime: endTime
+        };
+
+        itemElement.classList.add("is-dragging-date");
+        document.body.classList.add("dragging-gantt-date");
+        document.addEventListener("pointermove", handleDateDragMove);
+        document.addEventListener("pointerup", handleDateDragEnd);
+        updateDragPreview(event.clientX, event.clientY);
+    }
+
+    function handleDateDragMove(event) {
+        if (!dragState) {
+            return;
+        }
+
+        var timeSpan = dragState.bounds.max - dragState.bounds.min;
+        var deltaTime = (event.clientX - dragState.pointerStartX) / dragState.trackWidth * timeSpan;
+        var deltaDays = Math.round(deltaTime / 86400000);
+        if (dragState.handleType === "start") {
+            dragState.currentStartTime = dragState.originalStartTime + (deltaDays * 86400000);
+            dragState.currentEndTime = dragState.originalEndTime;
+        } else {
+            dragState.currentStartTime = dragState.originalStartTime;
+            dragState.currentEndTime = dragState.originalEndTime + (deltaDays * 86400000);
+        }
+
+        updateDragPreview(event.clientX, event.clientY);
+    }
+
+    function handleDateDragEnd(event) {
+        if (!dragState) {
+            return;
+        }
+
+        document.removeEventListener("pointermove", handleDateDragMove);
+        document.removeEventListener("pointerup", handleDateDragEnd);
+        document.body.classList.remove("dragging-gantt-date");
+        hideDragTooltip();
+
+        var state = dragState;
+        dragState = null;
+        state.itemElement.classList.remove("is-dragging-date");
+        state.itemElement.classList.remove("is-invalid-date-drag");
+        if (state.currentEndTime < state.currentStartTime) {
+            showStatus("End Date cannot be earlier than Start Date.", true);
+            renderGantt();
+            return;
+        }
+
+        var sourceRowIndex = readNumber(state.item.sourceRowIndex, state.item.SourceRowIndex);
+        if (!isFinite(sourceRowIndex) || sourceRowIndex < 0) {
+            showStatus("Gantt date update could not identify the launch row.", true);
+            renderGantt();
+            return;
+        }
+
+        if (!window.chrome || !window.chrome.webview || typeof window.chrome.webview.postMessage !== "function") {
+            showStatus("Gantt date update is not available in this host.", true);
+            renderGantt();
+            return;
+        }
+
+        var startDateIso = formatLocalIso(state.currentStartTime);
+        var endDateIso = formatLocalIso(state.currentEndTime);
+        if (!isValidIsoPayloadDate(startDateIso)) {
+            showStatus("Internal Gantt error: Start Date is not ISO.", true);
+            debugGantt("date-drop-blocked", buildDatePayloadDebugInfo(state, startDateIso, endDateIso));
+            renderGantt();
+            return;
+        }
+
+        if (!isValidIsoPayloadDate(endDateIso)) {
+            showStatus("Internal Gantt error: End Date is not ISO.", true);
+            debugGantt("date-drop-blocked", buildDatePayloadDebugInfo(state, startDateIso, endDateIso));
+            renderGantt();
+            return;
+        }
+
+        if (Date.parse(endDateIso) < Date.parse(startDateIso)) {
+            showStatus("End Date cannot be earlier than Start Date.", true);
+            renderGantt();
+            return;
+        }
+
+        var combination = getItemCombination(state.item, state.lane);
+        debugGantt("date-drop", buildDatePayloadDebugInfo(state, startDateIso, endDateIso));
+        window.chrome.webview.postMessage({
+            type: "cooldownGanttAction",
+            action: "update-gantt-launch-dates",
+            sourceRowIndex: sourceRowIndex,
+            issueKey: state.item.issueKey || state.item.IssueKey || "",
+            channel: state.item.channel || state.item.Channel || "",
+            region: state.item.regionGroup || state.item.RegionGroup || "",
+            audience: state.item.audience || state.item.Audience || "",
+            combination: combination.key,
+            startDateIso: startDateIso,
+            endDateIso: endDateIso
+        });
+        showStatus("Updating launch dates...", false);
+    }
+
+    function updateDragPreview(clientX, clientY) {
+        if (!dragState) {
+            return;
+        }
+
+        var startLeft = getTimelinePosition(dragState.currentStartTime, dragState.bounds, dragState.trackWidth);
+        var endLeft = getTimelinePosition(dragState.currentEndTime, dragState.bounds, dragState.trackWidth);
+        var left = Math.min(startLeft, endLeft);
+        var width = Math.max(6, Math.abs(endLeft - startLeft));
+        var isInvalid = dragState.currentEndTime < dragState.currentStartTime;
+        dragState.windowBar.style.left = left + "px";
+        dragState.windowBar.style.width = width + "px";
+        dragState.itemElement.classList.toggle("is-invalid-date-drag", isInvalid);
+
+        var previewDate = dragState.handleType === "start"
+            ? dragState.currentStartTime
+            : dragState.currentEndTime;
+        showDragTooltip(
+            (dragState.handleType === "start" ? "Start: " : "End: ") + formatEditableDate(previewDate),
+            clientX,
+            clientY,
+            isInvalid);
+    }
+
+    function showDragTooltip(text, clientX, clientY, isInvalid) {
+        if (!dragTooltip) {
+            dragTooltip = document.createElement("div");
+            dragTooltip.className = "gantt-drag-tooltip";
+            document.body.appendChild(dragTooltip);
+        }
+
+        dragTooltip.textContent = text;
+        dragTooltip.classList.toggle("is-error", !!isInvalid);
+        dragTooltip.style.left = (clientX + 14) + "px";
+        dragTooltip.style.top = (clientY + 14) + "px";
+        dragTooltip.style.display = "block";
+    }
+
+    function hideDragTooltip() {
+        if (dragTooltip) {
+            dragTooltip.style.display = "none";
+        }
+    }
+
+    function getPlannedTime(item) {
+        return parseTimelineDate(getItemStartIso(item));
+    }
+
+    function getEndTime(item) {
+        return parseTimelineDate(getItemEndIso(item));
+    }
+
+    function getItemStartIso(item) {
+        return item.startDateIso || item.StartDateIso || item.plannedDateIso || item.PlannedDateIso || item.plannedUtc || item.PlannedUtc || "";
+    }
+
+    function getItemEndIso(item) {
+        return item.endDateIso || item.EndDateIso || item.endUtc || item.EndUtc || "";
+    }
+
+    function getRecommendedEndTime(item) {
+        return parseTimelineDate(item.recommendedEndDateIso || item.RecommendedEndDateIso || item.suggestedEndDateIso || item.SuggestedEndDateIso);
+    }
+
+    function getDisplayActualTime(item) {
+        var actualTime = parseTimelineDate(item.actualDateIso || item.ActualDateIso);
+        if (isFinite(actualTime)) {
+            return actualTime;
+        }
+
+        var recommendedTime = getRecommendedEndTime(item);
+        if (isFinite(recommendedTime)) {
+            return recommendedTime;
+        }
+
+        var endTime = getEndTime(item);
+        if (isFinite(endTime)) {
+            return endTime;
+        }
+
+        return getPlannedTime(item);
+    }
+
+    function buildDatePayloadDebugInfo(state, startDateIso, endDateIso) {
+        var item = state && state.item ? state.item : {};
+        return {
+            scriptVersion: ganttScriptVersion,
+            sourceRowIndex: readNumber(item.sourceRowIndex, item.SourceRowIndex),
+            handleType: state ? state.handleType : "",
+            outgoingStartDateIso: startDateIso,
+            outgoingEndDateIso: endDateIso,
+            startMatchesIsoRegex: isValidIsoPayloadDate(startDateIso),
+            endMatchesIsoRegex: isValidIsoPayloadDate(endDateIso),
+            sourceFields: {
+                startDateIso: item.startDateIso,
+                StartDateIso: item.StartDateIso,
+                plannedDateIso: item.plannedDateIso,
+                PlannedDateIso: item.PlannedDateIso,
+                plannedUtc: item.plannedUtc,
+                PlannedUtc: item.PlannedUtc,
+                displayStartDate: item.plannedDate || item.PlannedDate || "",
+                endDateIso: item.endDateIso,
+                EndDateIso: item.EndDateIso,
+                endUtc: item.endUtc,
+                EndUtc: item.EndUtc,
+                displayEndDate: item.endDate || item.EndDate || ""
+            },
+            numericDates: {
+                currentStartTime: state ? state.currentStartTime : NaN,
+                currentEndTime: state ? state.currentEndTime : NaN,
+                originalStartTime: state ? state.originalStartTime : NaN,
+                originalEndTime: state ? state.originalEndTime : NaN
+            }
+        };
+    }
+
+    function getLaneItems(lane) {
+        return Array.isArray(lane && lane.items)
+            ? lane.items
+            : (Array.isArray(lane && lane.Items) ? lane.Items : []);
+    }
+
+    function getItemCombination(item, lane) {
+        var channel = normalizeToken(item.channel || item.Channel || lane.channel || lane.Channel || "");
+        var region = normalizeToken(item.regionGroup || item.RegionGroup || parsePartitionPart(item.partitionLabel || item.PartitionLabel, 1));
+        var audience = normalizeToken(item.audience || item.Audience || parsePartitionPart(item.partitionLabel || item.PartitionLabel, 2));
+        var label = [channel || "UNKNOWN", region || "UNKNOWN", audience || "UNKNOWN"].join(" | ");
+        return {
+            key: label,
+            label: label
+        };
+    }
+
+    function getItemLookupKeys(item, lane) {
+        var keys = [];
+        var payloadKey = item.lookupKey || item.LookupKey || "";
+        if (payloadKey) {
+            keys.push(payloadKey);
+        }
+
+        var combination = getItemCombination(item, lane);
+        var parts = combination.key.split("|").map(function (part) {
+            return part.trim();
+        });
+        var computedKey = buildLookupKey(
+            readNumber(item.sourceRowIndex, item.SourceRowIndex),
+            item.issueKey || item.IssueKey || "",
+            parts[0] || "",
+            parts[1] || "",
+            parts[2] || "");
+        if (computedKey) {
+            keys.push(computedKey);
+        }
+
+        return uniqueStrings(keys);
+    }
+
+    function buildLookupKey(sourceRowIndex, issueKey, channel, region, audience) {
+        var identity = isFinite(sourceRowIndex) && sourceRowIndex >= 0
+            ? String(sourceRowIndex)
+            : normalizeToken(issueKey);
+        if (!identity) {
+            return "";
+        }
+
+        return [
+            identity,
+            normalizeToken(channel),
+            normalizeToken(region),
+            normalizeToken(audience)
+        ].join("|");
+    }
+
+    function getStringArray(value) {
+        if (!Array.isArray(value)) {
+            return [];
+        }
+
+        return uniqueStrings(value.map(function (entry) {
+            return String(entry || "").trim();
+        }).filter(function (entry) {
+            return !!entry;
+        }));
+    }
+
+    function uniqueStrings(values) {
+        var seen = new Set();
+        var result = [];
+        values.forEach(function (value) {
+            if (!value || seen.has(value)) {
+                return;
+            }
+
+            seen.add(value);
+            result.push(value);
+        });
+
+        return result;
+    }
+
+    function getNormalizedStatus(status) {
+        var normalizedStatus = normalizeToken(status).replace(/[\s-]+/g, "_");
+        if (normalizedStatus === "TIMED_OUT" || normalizedStatus === "TIMEOUT") {
+            return "expired";
+        }
+
+        if (normalizedStatus === "EXPIRED") {
+            return "expired";
+        }
+
+        if (normalizedStatus === "DELAYED") {
+            return "delayed";
+        }
+
+        if (normalizedStatus === "ON_TIME" || normalizedStatus === "ONTIME") {
+            return "on_time";
+        }
+
+        return normalizedStatus.toLowerCase();
+    }
+
+    function parsePartitionPart(partitionLabel, index) {
+        if (typeof partitionLabel !== "string" || !partitionLabel.length) {
+            return "";
+        }
+
+        var parts = partitionLabel.split("|").map(function (part) {
+            return part.trim();
+        });
+        return parts[index] || "";
+    }
+
+    function normalizeToken(value) {
+        return String(value || "").trim().toUpperCase();
+    }
+
+    function readNumber() {
+        for (var index = 0; index < arguments.length; index++) {
+            var value = arguments[index];
+            if (value === null || value === undefined || value === "") {
+                continue;
+            }
+
+            var parsed = Number(value);
+            if (isFinite(parsed)) {
+                return parsed;
+            }
+        }
+
+        return NaN;
+    }
+
+    function showStatus(message, isError) {
+        if (!ganttStatus) {
+            return;
+        }
+
+        if (!message) {
+            ganttStatus.textContent = "";
+            ganttStatus.style.display = "none";
+            return;
+        }
+
+        ganttStatus.textContent = message;
+        ganttStatus.classList.toggle("is-error", !!isError);
+        ganttStatus.style.display = "block";
+    }
+
+    function getTimelinePosition(timeValue, bounds, trackWidth) {
+        if (bounds.max <= bounds.min) {
+            return 0;
+        }
+
+        return Math.round((timeValue - bounds.min) / (bounds.max - bounds.min) * trackWidth);
+    }
+
+    function parseTimelineDate(value) {
+        if (typeof value !== "string" || !value.length) {
+            return NaN;
+        }
+
+        return Date.parse(value);
+    }
+
+    function startOfDay(timeValue) {
+        var date = new Date(timeValue);
+        date.setHours(0, 0, 0, 0);
+        return date.getTime();
+    }
+
+    function formatAxisDate(timeValue) {
+        var date = new Date(timeValue);
+        var year = String(date.getFullYear());
+        var month = String(date.getMonth() + 1).padStart(2, "0");
+        var day = String(date.getDate()).padStart(2, "0");
+        return year + "-" + month + "-" + day;
+    }
+
+    function formatEditableDate(timeValue) {
+        var date = new Date(timeValue);
+        var year = String(date.getFullYear());
+        var month = String(date.getMonth() + 1).padStart(2, "0");
+        var day = String(date.getDate()).padStart(2, "0");
+        var hour = String(date.getHours()).padStart(2, "0");
+        var minute = String(date.getMinutes()).padStart(2, "0");
+        return year + "-" + month + "-" + day + " " + hour + ":" + minute;
+    }
+
+    function formatLocalIso(timeValue) {
+        if (!isFinite(timeValue)) {
+            return "";
+        }
+
+        var date = new Date(timeValue);
+        if (isNaN(date.getTime())) {
+            return "";
+        }
+
+        var year = String(date.getFullYear());
+        var month = String(date.getMonth() + 1).padStart(2, "0");
+        var day = String(date.getDate()).padStart(2, "0");
+        var hour = String(date.getHours()).padStart(2, "0");
+        var minute = String(date.getMinutes()).padStart(2, "0");
+        var second = String(date.getSeconds()).padStart(2, "0");
+        return year + "-" + month + "-" + day + "T" + hour + ":" + minute + ":" + second;
+    }
+
+    function isValidIsoPayloadDate(value) {
+        if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(value || "")) {
+            return false;
+        }
+
+        return isFinite(Date.parse(value));
+    }
+
+    function readDebugFlag() {
+        try {
+            return window.localStorage &&
+                window.localStorage.getItem("cooldown-gantt-debug") === "1";
+        } catch (e) {
+            return false;
+        }
+    }
+
+    function debugGantt(label, payload) {
+        if (!ganttDebugEnabled || !window.console || typeof window.console.debug !== "function") {
+            return;
+        }
+
+        window.console.debug("[CooldownGantt] " + label, payload);
+    }
+})();
