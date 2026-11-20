@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MailoV2</title>
+    <link rel="stylesheet" href="theme.css">
+    <link rel="stylesheet" href="MailoV2.css">
+</head>
+<body>
+    <div class="mailo-shell">
+        <div class="mailo-row mailo-row-header">
+            <section class="mailo-status" aria-live="polite">
+                <div class="mailo-status-text" id="statusText">Please select a folder with templates</div>
+            </section>
+            <button class="mailo-button" id="resetButton" type="button">Reset</button>
+        </div>
+
+        <!-- The standard create-and-upload flow, left to right. Steps are numbered by CSS counters,
+             so render() can keep setting the primary button's label with textContent. -->
+        <section class="mailo-flow" aria-label="Create and upload a template">
+            <div class="mailo-step" id="folderStep">
+                <button class="mailo-button" id="browseButton" type="button">Select Templates Folder</button>
+                <div class="mailo-step-caption" id="templatesFolderText">No templates folder selected</div>
+            </div>
+            <div class="mailo-step" id="subjectStep">
+                <button class="mailo-button" id="subjectButton" type="button">Select Subject File</button>
+                <div class="mailo-step-caption" id="subjectFileText">No subject file selected</div>
+            </div>
+            <div class="mailo-step" id="openTemplatesStep">
+                <button class="mailo-button" id="openTemplatesButton" type="button">Open Templates Browser</button>
+            </div>
+            <div class="mailo-step" id="useCurrentUrlStep">
+                <button class="mailo-button" id="useCurrentUrlButton" type="button">Use Current Page</button>
+            </div>
+            <div class="mailo-step" id="uploadStep">
+                <button class="mailo-button mailo-button-primary" id="selectTemplateButton" type="button">Select Template</button>
+            </div>
+        </section>
+
+        <!-- The other way to pick the template for steps 3-4: type its URL or name. -->
+        <section class="mailo-row mailo-row-reference" aria-label="Template URL or name">
+            <input class="mailo-input" id="templateReferenceInput" type="text" placeholder="Or type a template URL (session) or template name (Tools API)" spellcheck="false" autocomplete="off">
+            <button class="mailo-button" id="useTemplateReferenceButton" type="button">Use Template</button>
+            <div class="mailo-file" id="templateSummary" aria-live="polite">No template selected</div>
+        </section>
+
+        <section class="mailo-row mailo-row-tools" aria-label="Preview and other tools">
+            <button class="mailo-button" id="previousButton" type="button">Previous</button>
+            <button class="mailo-button" id="nextButton" type="button">Next</button>
+            <button class="mailo-button" id="showPreviewButton" type="button">Show preview</button>
+            <button class="mailo-button" id="refreshButton" type="button">Refresh Preview</button>
+            <button class="mailo-button" id="copyLinkButton" type="button">Copy Link</button>
+            <button class="mailo-button" id="bindingsButton" type="button">Update Bindings</button>
+        </section>
+
+        <section class="mailo-options" aria-label="Localization options">
+            <div class="mailo-options-title">Localization</div>
+            <label class="mailo-toggle">
+                <input type="checkbox" id="sendEnglishAsAllContentToggle">
+                <span>Send en as All &mdash; email content</span>
+            </label>
+            <label class="mailo-toggle">
+                <input type="checkbox" id="sendEnglishAsAllBindingsToggle">
+                <span>Send en as All &mdash; bindings</span>
+            </label>
+            <div class="mailo-options-help">
+                Uploads the English entry with an empty "lang" (PRM's catch-all) instead of "en".
+                Content comes from en.html, bindings from the subject Excel &mdash; each can be switched separately.
+                The bindings toggle also applies to Update Bindings.
+            </div>
+        </section>
+
+        <section class="mailo-log" aria-label="PRM output log">
+            <div class="mailo-log-title">PRM output log</div>
+            <pre class="mailo-log-body" id="prmLog">No send attempted yet.</pre>
+        </section>
+    </div>
+
+    <script src="MailoV2.js"></script>
+</body>
+</html>
